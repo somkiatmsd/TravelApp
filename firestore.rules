@@ -1,0 +1,73 @@
+rules_version = '2';
+
+// Wanderpin security rules
+// - Each user's places are private to that user.
+// - A plan is visible to its members. Only the owner can invite or remove members.
+// - Members can edit the trip content and can leave the plan.
+// - Someone invited by email joins by adding themselves (only if their email is in pendingEmails).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function myEmail() {
+      return request.auth.token.email is string ? request.auth.token.email.lower() : '';
+    }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function membersChangedOnlyForMe() {
+      return request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([me()]);
+    }
+    function validPlan(d) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && d.start is string && d.end is string
+        && d.memberIds is list && d.memberIds.size() <= 50
+        && d.pendingEmails is list && d.pendingEmails.size() <= 50
+        && d.members is map;
+    }
+
+    match /users/{userId}/places/{placeId} {
+      allow read, write: if signedIn() && me() == userId;
+    }
+
+    match /plans/{planId} {
+      allow read: if signedIn() && (
+        me() in resource.data.memberIds
+        || (myEmail() != '' && myEmail() in resource.data.pendingEmails)
+      );
+
+      allow create: if signedIn()
+        && request.resource.data.ownerId == me()
+        && request.resource.data.memberIds == [me()]
+        && request.resource.data.pendingEmails == []
+        && validPlan(request.resource.data);
+
+      allow delete: if signedIn() && resource.data.ownerId == me();
+
+      allow update: if signedIn() && validPlan(request.resource.data) && (
+        // owner: anything, but cannot hand over ownership or drop themself
+        (resource.data.ownerId == me()
+          && request.resource.data.ownerId == me()
+          && me() in request.resource.data.memberIds)
+
+        // member: edit trip content only
+        || (me() in resource.data.memberIds
+          && changed().hasOnly(['title', 'start', 'end', 'color', 'note', 'placeIds', 'stops', 'updatedAt']))
+
+        // member (not owner): leave the plan
+        || (me() in resource.data.memberIds
+          && resource.data.ownerId != me()
+          && changed().hasOnly(['memberIds', 'members', 'updatedAt'])
+          && request.resource.data.memberIds.toSet() == resource.data.memberIds.toSet().difference([me()].toSet())
+          && membersChangedOnlyForMe())
+
+        // invited by email: join (add self, remove own email from pending)
+        || (myEmail() != ''
+          && myEmail() in resource.data.pendingEmails
+          && changed().hasOnly(['memberIds', 'members', 'pendingEmails', 'updatedAt'])
+          && request.resource.data.memberIds.toSet() == resource.data.memberIds.toSet().union([me()].toSet())
+          && request.resource.data.pendingEmails.toSet() == resource.data.pendingEmails.toSet().difference([myEmail()].toSet())
+          && membersChangedOnlyForMe())
+      );
+    }
+  }
+}

@@ -21,6 +21,9 @@
     <h1 class="brand"><span class="brand-dot"></span>Wanderpin</h1>
     <div class="topbar-actions">
       <button id="btn-install" class="chip" hidden>ติดตั้งแอป</button>
+      <button id="btn-account" class="avatar-btn" aria-label="บัญชีผู้ใช้" title="บัญชีผู้ใช้">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="4"/><path d="M4 20.5c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5z"/></svg>
+      </button>
       <button id="btn-menu" class="icon-btn" aria-label="เมนู">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
       </button>
@@ -203,6 +206,37 @@
       <button class="btn danger" id="btn-clear">ล้างข้อมูลทั้งหมด</button>
     </div>
     <p class="muted small">ข้อมูลเก็บไว้ในเครื่องนี้ (ใช้งานออฟไลน์ได้) · แผนที่ © OpenStreetMap contributors</p>
+  </dialog>
+
+  <!-- Account -->
+  <dialog id="dlg-account" class="sheet small">
+    <div class="sheet-head">
+      <h2>บัญชีผู้ใช้</h2>
+      <button type="button" class="icon-btn" data-close aria-label="ปิด">✕</button>
+    </div>
+    <div id="account-body"></div>
+  </dialog>
+
+  <!-- Companions -->
+  <dialog id="dlg-members" class="sheet small">
+    <div class="sheet-head">
+      <h2>เพื่อนร่วมทาง</h2>
+      <button type="button" class="icon-btn" data-close aria-label="ปิด">✕</button>
+    </div>
+    <p class="muted" id="members-plan"></p>
+    <ul id="member-list" class="member-list"></ul>
+    <form id="form-invite" class="invite" autocomplete="off">
+      <label for="invite-email">เชิญด้วยอีเมลที่เพื่อนใช้เข้าระบบ Google / Facebook</label>
+      <div class="invite-row">
+        <input id="invite-email" name="email" type="email" required placeholder="friend@gmail.com" inputmode="email">
+        <button class="btn primary" type="submit">เชิญ</button>
+      </div>
+    </form>
+    <div class="menu-actions">
+      <button class="btn" id="btn-share-invite">แชร์ลิงก์ชวนเพื่อน</button>
+      <button class="btn danger" id="btn-leave-plan" hidden>ออกจากแผนนี้</button>
+    </div>
+    <p class="muted small">เพื่อนจะเข้าร่วมแผนอัตโนมัติเมื่อเปิดแอปและเข้าระบบด้วยอีเมลที่เชิญไว้</p>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

@@ -1,4 +1,5 @@
-import { store } from './store.js';
+import { store, loadLocal } from './store.js';
+import { initCloud, cloudConfigured, AUTH_ERRORS, lowerEmail, profileOf } from './cloud.js';
 
 /* ---------- helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -29,6 +30,29 @@ function toast(msg) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.remove('show'), 2200);
 }
+
+/** Places of a plan, in order. Own places are live; a companion's places come from the plan's snapshot. */
+const planPlaces = (pl) =>
+  pl.placeIds.map((id) => store.getPlace(id) || (pl.stops || []).find((s) => s.id === id)).filter(Boolean);
+const stopOf = (p) => ({ id: p.id, name: p.name, category: p.category, status: p.status, visitedAt: p.visitedAt ?? null, lat: p.lat ?? null, lng: p.lng ?? null });
+
+const initials = (name = '?') => [...name.trim()][0]?.toUpperCase() || '?';
+function avatar(m, cls = '') {
+  const title = esc(m.name || m.email || '');
+  if (m.photo) return `<img class="avatar ${cls}" src="${esc(m.photo)}" alt="" title="${title}" data-initial="${esc(initials(m.name || m.email))}" referrerpolicy="no-referrer">`;
+  return `<span class="avatar ${cls}" title="${title}">${esc(initials(m.name || m.email))}</span>`;
+}
+
+// Profile photo failed to load (offline, expired link): show the initial instead.
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.classList.contains('avatar')) return;
+  const span = document.createElement('span');
+  span.className = img.className;
+  span.title = img.title;
+  span.textContent = img.dataset.initial || '?';
+  img.replaceWith(span);
+}, true);
 
 const directionsUrl = (p) => `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
 
@@ -65,12 +89,13 @@ const pinIcon = (cls, label = '') =>
 function placePopup(p) {
   const div = document.createElement('div');
   div.className = 'popup';
+  const own = Boolean(store.getPlace(p.id));
   div.innerHTML = `
     <h4>${icon(p.category)} ${esc(p.name)}</h4>
-    <p>${esc(p.category)} · ${p.status === 'visited' ? `ไปแล้ว${p.visitedAt ? ' ' + fmtDate(p.visitedAt) : ''}` : 'ยังไม่ได้ไป'}</p>
+    <p>${esc(p.category)} · ${p.status === 'visited' ? `ไปแล้ว${p.visitedAt ? ' ' + fmtDate(p.visitedAt) : ''}` : 'ยังไม่ได้ไป'}${own ? '' : ' · ของเพื่อนร่วมทาง'}</p>
     <div class="row">
-      <button class="chip" data-a="edit">แก้ไข</button>
-      <button class="chip primary" data-a="toggle">${p.status === 'visited' ? 'ยังไม่ได้ไป' : '✓ ไปแล้ว'}</button>
+      ${own ? `<button class="chip" data-a="edit">แก้ไข</button>
+      <button class="chip primary" data-a="toggle">${p.status === 'visited' ? 'ยังไม่ได้ไป' : '✓ ไปแล้ว'}</button>` : ''}
       <a class="chip" href="${directionsUrl(p)}" target="_blank" rel="noopener">นำทาง</a>
     </div>`;
   div.addEventListener('click', (e) => {
@@ -215,7 +240,7 @@ $('#search-input').addEventListener('input', (e) => { if (!e.target.value) resul
 function showPlanOnMap(planId) {
   const plan = store.getPlan(planId);
   if (!plan) return;
-  const places = plan.placeIds.map((id) => store.getPlace(id)).filter((p) => p && typeof p.lat === 'number');
+  const places = planPlaces(plan).filter((p) => typeof p.lat === 'number');
   if (!places.length) { toast('แผนนี้ยังไม่มีสถานที่ที่มีพิกัด'); return; }
   go('map');
   routeLayer.clearLayers();
@@ -223,7 +248,7 @@ function showPlanOnMap(planId) {
   L.polyline(pts, { color: plan.color || '#0d9488', weight: 4, opacity: .85, dashArray: '8 8' }).addTo(routeLayer);
   places.forEach((p, i) => {
     L.marker([p.lat, p.lng], { icon: pinIcon(p.status === 'visited' ? 'visited' : 'want', i + 1), zIndexOffset: 1000 })
-      .bindPopup(() => placePopup(store.getPlace(p.id))).addTo(routeLayer);
+      .bindPopup(() => placePopup(store.getPlace(p.id) || p)).addTo(routeLayer);
   });
   const ctl = L.control({ position: 'topleft' });
   ctl.onAdd = () => {
@@ -484,10 +509,13 @@ function setColor(c) {
 }
 $('#swatches').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setColor(b.dataset.c); });
 
+let extraStops = []; // companion's places already in the plan being edited
+
 function renderPicker() {
   const ul = $('#plan-place-picker');
-  if (!store.places.length) { ul.innerHTML = '<li class="muted">ยังไม่มีสถานที่ — เพิ่มสถานที่ก่อน</li>'; return; }
-  const sorted = [...store.places].sort((a, b) => {
+  const all = [...store.places, ...extraStops.filter((s) => !store.getPlace(s.id))];
+  if (!all.length) { ul.innerHTML = '<li class="muted">ยังไม่มีสถานที่ — เพิ่มสถานที่ก่อน</li>'; return; }
+  const sorted = all.sort((a, b) => {
     const ia = pickedIds.indexOf(a.id), ib = pickedIds.indexOf(b.id);
     if (ia >= 0 && ib >= 0) return ia - ib;
     if (ia >= 0) return -1;
@@ -496,7 +524,8 @@ function renderPicker() {
   });
   ul.innerHTML = sorted.map((p) => {
     const i = pickedIds.indexOf(p.id);
-    return `<li data-id="${p.id}" class="${i >= 0 ? 'on' : ''}"><span class="n">${i >= 0 ? i + 1 : ''}</span>${icon(p.category)} ${esc(p.name)}<small>${p.status === 'visited' ? 'ไปแล้ว' : ''}</small></li>`;
+    const tag = !store.getPlace(p.id) ? 'ของเพื่อน' : p.status === 'visited' ? 'ไปแล้ว' : '';
+    return `<li data-id="${p.id}" class="${i >= 0 ? 'on' : ''}"><span class="n">${i >= 0 ? i + 1 : ''}</span>${icon(p.category)} ${esc(p.name)}<small>${tag}</small></li>`;
   }).join('');
 }
 $('#plan-place-picker').addEventListener('click', (e) => {
@@ -516,13 +545,16 @@ function openPlanForm(id, preset = {}) {
   formPlan.reset();
   formPlan.dataset.id = pl?.id || '';
   $('#plan-form-title').textContent = pl ? 'แก้ไขแผนเที่ยว' : 'สร้างแผนเที่ยว';
-  $('#btn-delete-plan').hidden = !pl;
+  const del = $('#btn-delete-plan');
+  del.hidden = !pl;
+  del.textContent = pl && !store.isOwner(pl) ? 'ออกจากแผน' : 'ลบ';
   formPlan.title.value = pl?.title || '';
   formPlan.start.value = pl?.start || preset.start || addDays(todayStr(), 7);
   formPlan.end.value = pl?.end || preset.end || formPlan.start.value;
   formPlan.note.value = pl?.note || '';
   setColor(pl?.color || PLAN_COLORS[store.plans.length % PLAN_COLORS.length]);
   pickedIds = pl ? [...pl.placeIds] : preset.placeIds || [];
+  extraStops = pl?.stops || [];
   renderPicker();
   dlgPlan.showModal();
 }
@@ -531,6 +563,9 @@ formPlan.addEventListener('submit', (e) => {
   e.preventDefault();
   const f = formPlan;
   if (f.end.value < f.start.value) { toast('วันสิ้นสุดต้องไม่ก่อนวันเริ่ม'); return; }
+  const stops = pickedIds
+    .map((id) => store.getPlace(id) || extraStops.find((s) => s.id === id))
+    .filter(Boolean).map(stopOf);
   store.savePlan({
     id: f.dataset.id || undefined,
     title: f.title.value.trim(),
@@ -538,14 +573,21 @@ formPlan.addEventListener('submit', (e) => {
     end: f.end.value,
     color: f.color.value,
     note: f.note.value.trim(),
-    placeIds: pickedIds,
+    placeIds: stops.map((s) => s.id),
+    stops,
   });
   dlgPlan.close();
   toast('บันทึกแผนแล้ว');
 });
 $('#btn-delete-plan').addEventListener('click', () => {
   const pl = store.getPlan(formPlan.dataset.id);
-  if (pl && confirm(`ลบแผน “${pl.title}”?`)) { store.deletePlan(pl.id); dlgPlan.close(); toast('ลบแผนแล้ว'); }
+  if (!pl) return;
+  const owner = store.isOwner(pl);
+  if (confirm(owner ? `ลบแผน “${pl.title}”? (เพื่อนร่วมทางจะไม่เห็นแผนนี้อีก)` : `ออกจากแผน “${pl.title}”?`)) {
+    store.deletePlan(pl.id);
+    dlgPlan.close();
+    toast(owner ? 'ลบแผนแล้ว' : 'ออกจากแผนแล้ว');
+  }
 });
 $('#btn-new-plan').addEventListener('click', () => openPlanForm(null));
 
@@ -555,6 +597,25 @@ function planStatus(pl) {
   if (pl.start <= t) return { label: 'กำลังเที่ยว', cls: 'now' };
   const days = Math.round((parseYmd(pl.start) - parseYmd(t)) / 86400000);
   return { label: days === 1 ? 'พรุ่งนี้' : `อีก ${days} วัน`, cls: '' };
+}
+
+/** Members of a plan: [{uid, name, email, photo, owner, me}] owner first. */
+function planMembers(pl) {
+  const members = pl.members || {};
+  return (pl.memberIds || [])
+    .map((id) => ({ uid: id, ...(members[id] || (store.user?.uid === id ? profileOf(store.user) : { name: 'สมาชิก' })), owner: id === pl.ownerId, me: id === store.user?.uid }))
+    .sort((a, b) => b.owner - a.owner);
+}
+
+function membersRow(pl) {
+  if (!store.isCloud) return '';
+  const ms = planMembers(pl);
+  const pending = pl.pendingEmails || [];
+  const faces = ms.slice(0, 5).map((m) => avatar(m)).join('') + pending.slice(0, 3).map((e) => avatar({ email: e }, 'pending')).join('');
+  const label = ms.length > 1 || pending.length
+    ? `${ms.length} คน${pending.length ? ` · รอเข้าร่วม ${pending.length}` : ''}`
+    : 'ยังไม่มีเพื่อนร่วมทาง';
+  return `<div class="avatars" data-a="members" role="button" tabindex="0">${faces}<span class="label">${label}</span></div>`;
 }
 
 function renderPlans() {
@@ -568,21 +629,25 @@ function renderPlans() {
   const past = store.plans.filter((p) => p.end < t).sort((a, b) => b.start.localeCompare(a.start));
   ul.innerHTML = [...upcoming, ...past].map((pl) => {
     const st = planStatus(pl);
-    const places = pl.placeIds.map((id) => store.getPlace(id)).filter(Boolean);
+    const places = planPlaces(pl);
     const done = places.filter((p) => p.status === 'visited').length;
     const nights = Math.round((parseYmd(pl.end) - parseYmd(pl.start)) / 86400000);
+    const owner = store.isCloud && !store.isOwner(pl) ? pl.members?.[pl.ownerId] : null;
     return `<li class="card plan-card" data-id="${pl.id}">
       <div class="plan-bar" style="background:${esc(pl.color || '#0d9488')}"></div>
       <div class="plan-body">
         <div class="title">${esc(pl.title)}<span class="tag ${st.cls}">${st.label}</span></div>
+        ${owner ? `<div class="shared-by">แชร์โดย ${esc(owner.name || owner.email)}</div>` : ''}
         <div class="plan-dates">📅 ${fmtRange(pl.start, pl.end)} · ${nights + 1} วัน${nights ? ` ${nights} คืน` : ''}</div>
         ${places.length ? `<ol>${places.map((p) => `<li class="${p.status === 'visited' ? 'done' : ''}">${icon(p.category)} ${esc(p.name)}</li>`).join('')}</ol>
           <div class="progress" title="ไปแล้ว ${done}/${places.length}"><i style="width:${(done / places.length) * 100}%"></i></div>
           <div class="meta">ไปแล้ว ${done}/${places.length} ที่</div>` : '<p class="note">ยังไม่ได้เลือกสถานที่</p>'}
         ${pl.note ? `<p class="note">${esc(pl.note)}</p>` : ''}
+        ${membersRow(pl)}
         <div class="row">
           <button class="chip" data-a="map">ดูเส้นทาง</button>
           <button class="chip" data-a="cal">ดูในปฏิทิน</button>
+          <button class="chip" data-a="members">👥 เพื่อนร่วมทาง</button>
           <button class="chip" data-a="edit">แก้ไข</button>
         </div>
       </div></li>`;
@@ -595,10 +660,101 @@ $('#plan-list').addEventListener('click', (e) => {
   const pl = store.getPlan(li.dataset.id);
   if (a === 'map') showPlanOnMap(pl.id);
   if (a === 'edit') openPlanForm(pl.id);
+  if (a === 'members') openMembers(pl.id);
   if (a === 'cal') {
     const d = parseYmd(pl.start);
     Object.assign(calState, { y: d.getFullYear(), m: d.getMonth(), sel: pl.start });
     go('calendar');
+  }
+});
+
+/* ---------- companions ---------- */
+const dlgMembers = $('#dlg-members');
+let membersPlanId = null;
+
+function openMembers(planId) {
+  if (!store.isCloud) {
+    openAccount(cloudConfigured
+      ? 'เข้าสู่ระบบก่อน เพื่อชวนเพื่อนร่วมทางและแชร์แผนนี้'
+      : 'ระบบเพื่อนร่วมทางยังไม่ได้เปิดใช้');
+    return;
+  }
+  membersPlanId = planId;
+  renderMembers();
+  dlgMembers.showModal();
+}
+
+function renderMembers() {
+  const pl = store.getPlan(membersPlanId);
+  if (!pl) { dlgMembers.close(); return; }
+  const owner = store.isOwner(pl);
+  $('#members-plan').textContent = `${pl.title} · ${fmtRange(pl.start, pl.end)}`;
+  const rows = planMembers(pl).map((m) => `<li>
+      ${avatar(m)}
+      <div class="who"><b>${esc(m.name || m.email)}${m.me ? ' (คุณ)' : ''}</b><small>${esc(m.email || '')}</small></div>
+      ${m.owner ? '<span class="role owner">เจ้าของแผน</span>' : '<span class="role">สมาชิก</span>'}
+      ${owner && !m.owner ? `<button class="remove" data-remove="${esc(m.uid)}" aria-label="ลบ ${esc(m.name)}">ลบ</button>` : ''}
+    </li>`);
+  const pend = (pl.pendingEmails || []).map((e) => `<li>
+      ${avatar({ email: e }, 'pending')}
+      <div class="who"><b>${esc(e)}</b><small>ยังไม่ได้เข้าระบบ</small></div>
+      <span class="role">รอเข้าร่วม</span>
+      ${owner ? `<button class="remove" data-cancel="${esc(e)}" aria-label="ยกเลิกคำเชิญ ${esc(e)}">ยกเลิก</button>` : ''}
+    </li>`);
+  $('#member-list').innerHTML = [...rows, ...pend].join('');
+  $('#form-invite').hidden = !owner;
+  $('#btn-leave-plan').hidden = owner;
+}
+
+$('#member-list').addEventListener('click', async (e) => {
+  const pl = store.getPlan(membersPlanId);
+  const rm = e.target.closest('[data-remove]')?.dataset.remove;
+  const cancel = e.target.closest('[data-cancel]')?.dataset.cancel;
+  try {
+    if (rm) {
+      const m = planMembers(pl).find((x) => x.uid === rm);
+      if (!confirm(`ลบ ${m?.name || 'สมาชิก'} ออกจากแผน?`)) return;
+      await store.removeMember(pl.id, rm);
+      toast('ลบสมาชิกแล้ว');
+    }
+    if (cancel) { await store.cancelInvite(pl.id, cancel); toast('ยกเลิกคำเชิญแล้ว'); }
+  } catch (err) { toast(cloudError(err)); }
+});
+
+$('#form-invite').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pl = store.getPlan(membersPlanId);
+  const email = lowerEmail($('#invite-email').value);
+  if (!pl || !email) return;
+  if (planMembers(pl).some((m) => m.email === email)) { toast('คนนี้อยู่ในแผนแล้ว'); return; }
+  if ((pl.pendingEmails || []).includes(email)) { toast('เชิญคนนี้ไว้แล้ว'); return; }
+  try {
+    await store.invite(pl.id, email);
+    $('#invite-email').value = '';
+    toast(`เชิญ ${email} แล้ว`);
+  } catch (err) { toast(cloudError(err)); }
+});
+
+$('#btn-share-invite').addEventListener('click', async () => {
+  const pl = store.getPlan(membersPlanId);
+  if (!pl) return;
+  const url = location.origin + location.pathname;
+  const text = `มาเที่ยวด้วยกัน! ทริป “${pl.title}” (${fmtRange(pl.start, pl.end)}) เปิด Wanderpin แล้วเข้าสู่ระบบด้วยอีเมลที่ฉันเชิญไว้ จะเห็นแผนนี้ทันที`;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'Wanderpin', text, url }); return; }
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    toast('คัดลอกข้อความเชิญแล้ว');
+  } catch (err) {
+    if (err?.name !== 'AbortError') toast('แชร์ไม่สำเร็จ');
+  }
+});
+
+$('#btn-leave-plan').addEventListener('click', () => {
+  const pl = store.getPlan(membersPlanId);
+  if (pl && confirm(`ออกจากแผน “${pl.title}”?`)) {
+    store.deletePlan(pl.id);
+    dlgMembers.close();
+    toast('ออกจากแผนแล้ว');
   }
 });
 
@@ -631,7 +787,10 @@ $('#file-import').addEventListener('change', async (e) => {
   e.target.value = '';
 });
 $('#btn-clear').addEventListener('click', () => {
-  if (confirm('ลบข้อมูลทั้งหมดในเครื่องนี้? (ควรส่งออกไว้ก่อน)')) { store.clear(); dlgMenu.close(); toast('ล้างข้อมูลแล้ว'); }
+  const msg = store.isCloud
+    ? 'ลบสถานที่และแผนทั้งหมดในบัญชีนี้? แผนที่เป็นของเพื่อนจะเป็นการออกจากแผนแทน (ควรส่งออกไว้ก่อน)'
+    : 'ลบข้อมูลทั้งหมดในเครื่องนี้? (ควรส่งออกไว้ก่อน)';
+  if (confirm(msg)) { store.clear(); dlgMenu.close(); toast('ล้างข้อมูลแล้ว'); }
 });
 
 /* close buttons / backdrop click for dialogs */
@@ -654,6 +813,7 @@ function renderAll() {
   renderPlans();
   if (current === 'calendar') renderCalendar();
   if (dlgPlan.open) renderPicker();
+  if (dlgMembers.open) renderMembers();
 }
 store.subscribe(renderAll);
 renderAll();
@@ -662,6 +822,128 @@ fitAll();
 const hash = location.hash.slice(1);
 if (hash === 'add') { go('map'); openPlaceForm(null); } else go(hash || 'map');
 window.addEventListener('hashchange', () => go(location.hash.slice(1)));
+
+/* ---------- account (Google / Facebook) ---------- */
+const dlgAccount = $('#dlg-account');
+let cloudApi = null;
+let cloudReady = null;
+let unwatch = null;
+let accountMsg = '';
+let busy = false;
+
+const GOOGLE_SVG = '<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>';
+const FB_SVG = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.88v2.26h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z"/></svg>';
+
+function cloudError(err) {
+  if (!err) return 'เกิดข้อผิดพลาด';
+  if (AUTH_ERRORS[err.code]) return AUTH_ERRORS[err.code];
+  if (err.code === 'permission-denied') return 'ไม่มีสิทธิ์ทำรายการนี้';
+  if (err.code === 'unavailable') return 'ออฟไลน์อยู่ จะซิงก์เมื่อกลับมาออนไลน์';
+  return err.message || 'เกิดข้อผิดพลาด';
+}
+store.onError = (err) => toast(cloudError(err));
+
+function renderAccountButton() {
+  const btn = $('#btn-account');
+  const u = store.user;
+  btn.classList.toggle('signed', Boolean(u));
+  btn.innerHTML = u
+    ? avatar(profileOf(u))
+    : '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="4"/><path d="M4 20.5c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5z"/></svg>';
+  btn.title = u ? `เข้าระบบแล้ว: ${profileOf(u).name}` : 'เข้าสู่ระบบ';
+}
+
+function renderAccount() {
+  const body = $('#account-body');
+  const u = store.user;
+  const msg = accountMsg ? `<p class="notice">${esc(accountMsg)}</p>` : '';
+  if (!cloudConfigured) {
+    body.innerHTML = `${msg}<div class="notice">ระบบสมาชิกและเพื่อนร่วมทางต้องเชื่อม Firebase ก่อน
+      ใส่ค่าโปรเจกต์ใน <code>js/firebase-config.js</code> ตามขั้นตอนใน README
+      ระหว่างนี้ข้อมูลทั้งหมดเก็บอยู่ในเครื่องนี้และใช้งานได้ตามปกติ</div>`;
+    return;
+  }
+  if (u) {
+    const p = profileOf(u);
+    body.innerHTML = `${msg}<div class="profile">${avatar(p, 'lg')}<div><b>${esc(p.name)}</b><small>${esc(p.email || 'ไม่มีอีเมลในบัญชีนี้')}</small></div></div>
+      <p class="muted small">ข้อมูลซิงก์กับบัญชีนี้ ใช้ได้ทุกเครื่องที่เข้าระบบ${p.email ? '' : ' · บัญชีที่ไม่มีอีเมลจะรับคำเชิญจากเพื่อนไม่ได้'}</p>
+      <div class="menu-actions"><button class="btn danger" id="btn-signout">ออกจากระบบ</button></div>`;
+    $('#btn-signout').onclick = async () => { await cloudApi.signOut(); dlgAccount.close(); toast('ออกจากระบบแล้ว'); };
+    return;
+  }
+  body.innerHTML = `${msg}<p class="muted">เข้าสู่ระบบเพื่อซิงก์ข้อมูลข้ามเครื่อง และชวนเพื่อนร่วมทางมาดูและแก้แผนเที่ยวด้วยกัน</p>
+    <div class="signin">
+      <button id="btn-google" ${busy ? 'disabled' : ''}>${GOOGLE_SVG}เข้าสู่ระบบด้วย Google</button>
+      <button id="btn-facebook" class="fb" ${busy ? 'disabled' : ''}>${FB_SVG}เข้าสู่ระบบด้วย Facebook</button>
+    </div>
+    <p class="muted small">ครั้งแรกที่เข้าระบบ สถานที่และแผนที่มีอยู่ในเครื่องนี้จะถูกอัปโหลดเข้าบัญชีให้</p>`;
+  $('#btn-google').onclick = () => signIn('google');
+  $('#btn-facebook').onclick = () => signIn('facebook');
+}
+
+async function signIn(kind) {
+  busy = true; accountMsg = ''; renderAccount();
+  try {
+    const api = await cloudReady;
+    if (!api) throw new Error('เชื่อมต่อระบบสมาชิกไม่ได้ (ต้องใช้อินเทอร์เน็ต)');
+    await api.signIn(kind);
+    dlgAccount.close();
+  } catch (err) {
+    accountMsg = cloudError(err);
+  } finally {
+    busy = false;
+    if (dlgAccount.open) renderAccount();
+  }
+}
+
+function openAccount(message = '') {
+  accountMsg = message;
+  renderAccount();
+  dlgAccount.showModal();
+}
+$('#btn-account').addEventListener('click', () => openAccount());
+
+async function onSignedIn(user) {
+  const migratedKey = `wanderpin:uploaded:${user.uid}`;
+  let uploaded = false;
+  try { uploaded = localStorage.getItem(migratedKey) === '1'; } catch {}
+  if (!uploaded) {
+    const local = loadLocal();
+    if (local.places.length || local.plans.length) {
+      try {
+        await cloudApi.uploadLocal(user, local);
+        toast(`อัปโหลด ${local.places.length} สถานที่, ${local.plans.length} แผน เข้าบัญชีแล้ว`);
+      } catch (err) { toast(cloudError(err)); }
+    }
+    try { localStorage.setItem(migratedKey, '1'); } catch {}
+  }
+  store.useCloud(cloudApi, user);
+  renderAccountButton();
+  let first = true;
+  unwatch = cloudApi.watch(user, {
+    onPlaces: (places) => { store.setPlaces(places); if (first) { first = false; fitAll(); } },
+    onPlans: (plans) => store.setPlans(plans),
+    onJoined: (title) => toast(`👋 เข้าร่วมแผน “${title}” แล้ว`),
+    onError: (err) => toast(cloudError(err)),
+  });
+}
+
+function startCloud() {
+  renderAccountButton();
+  if (!cloudConfigured) return;
+  cloudReady = initCloud().catch((err) => { console.warn('Firebase init failed', err); return null; });
+  cloudReady.then((api) => {
+    if (!api) return;
+    cloudApi = api;
+    api.redirectError.then((err) => { if (err) toast(cloudError(err)); });
+    api.onAuth((user) => {
+      unwatch?.(); unwatch = null;
+      if (user) onSignedIn(user);
+      else if (store.isCloud) { store.useLocal(); renderAccountButton(); }
+    });
+  });
+}
+startCloud();
 
 /* ---------- PWA ---------- */
 if ('serviceWorker' in navigator) {
