@@ -663,8 +663,8 @@ function renderPlans() {
         ${membersRow(pl)}
         <div class="row">
           ${places.length ? (planDoneForMe(pl)
-            ? '<span class="chip done-chip">✓ ไปครบแล้ว</span>'
-            : '<button class="chip primary" data-a="visited">✓ ไปแล้ว</button>') : ''}
+            ? '<span class="chip done-chip">🏁 จบทริปแล้ว</span>'
+            : '<button class="chip primary" data-a="visited">🏁 จบทริป</button>') : ''}
           <button class="chip" data-a="map">ดูเส้นทาง</button>
           <button class="chip" data-a="cal">ดูในปฏิทิน</button>
           <button class="chip" data-a="members">👥 เพื่อนร่วมทาง</button>
@@ -727,7 +727,7 @@ function markPlanVisited(pl) {
     return own ? stopOf(own) : (pl.stops || []).find((s) => s.id === id);
   }).filter(Boolean);
   if (store.isCloud && stops.some((s) => store.getPlace(s.id))) store.savePlan({ id: pl.id, stops });
-  toast(changed ? `🎉 บันทึกว่าไป “${pl.title}” แล้ว (${changed} ที่)` : 'ไปครบทุกที่ในแผนนี้แล้ว');
+  toast(changed ? `🏁 จบทริป “${pl.title}” แล้ว บันทึกว่าไป ${changed} ที่` : `🏁 ทริป “${pl.title}” จบแล้ว`);
 }
 
 /* ---------- companions (friends only) ---------- */
