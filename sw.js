@@ -1,5 +1,5 @@
 // Service worker: offline app shell + cached map tiles.
-const VERSION = 'v3';
+const VERSION = 'v4';
 const SHELL = `wanderpin-shell-${VERSION}`;
 const TILES = 'wanderpin-tiles';
 const MAX_TILES = 1500;
@@ -21,7 +21,7 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -63,12 +63,17 @@ self.addEventListener('fetch', (e) => {
 
   if (url.origin !== self.location.origin) return; // geocoding etc. → network only
 
-  // App shell: stale-while-revalidate.
+  // App shell: network first (always the newest version when online), cache when offline.
   e.respondWith(
     caches.open(SHELL).then(async (c) => {
-      const hit = await c.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' ? await c.match('./index.html') : null);
-      const net = fetch(req).then((res) => { if (res.ok) c.put(req, res.clone()); return res; }).catch(() => hit);
-      return hit || net;
+      try {
+        const res = await fetch(req, { cache: 'no-cache' });
+        if (res.ok) c.put(req, res.clone());
+        return res;
+      } catch {
+        return (await c.match(req, { ignoreSearch: true }))
+          || (req.mode === 'navigate' ? await c.match('./index.html') : Response.error());
+      }
     })
   );
 });

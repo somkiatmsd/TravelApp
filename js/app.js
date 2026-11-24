@@ -947,7 +947,12 @@ startCloud();
 
 /* ---------- PWA ---------- */
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(console.warn));
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(console.warn));
+  // A new version took over: reload once so the page runs the new code.
+  if (navigator.serviceWorker.controller) {
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
+  }
 }
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
