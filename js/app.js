@@ -635,6 +635,8 @@ function markPlansSeen() {
 
 function resetPlanNotices() { seenPlans = null; freshPlans.clear(); announced.clear(); }
 
+const expandedPlans = new Set(); // finished trips the user opened
+
 function renderPlans() {
   const ul = $('#plan-list');
   if (!store.plans.length) {
@@ -642,9 +644,22 @@ function renderPlans() {
     return;
   }
   const t = todayStr();
-  const upcoming = store.plans.filter((p) => p.end >= t).sort((a, b) => a.start.localeCompare(b.start));
-  const past = store.plans.filter((p) => p.end < t).sort((a, b) => b.start.localeCompare(a.start));
-  ul.innerHTML = [...upcoming, ...past].map((pl) => {
+  const isFinished = (pl) => pl.placeIds.length > 0 && planDoneForMe(pl);
+  const active = store.plans.filter((p) => !isFinished(p));
+  const upcoming = active.filter((p) => p.end >= t).sort((a, b) => a.start.localeCompare(b.start));
+  const past = active.filter((p) => p.end < t).sort((a, b) => b.start.localeCompare(a.start));
+  const finished = store.plans.filter(isFinished).sort((a, b) => b.end.localeCompare(a.end));
+  ul.innerHTML = [...upcoming, ...past, ...finished].map((pl) => {
+    // Finished trips are folded to one line (name + status); tap to open.
+    if (isFinished(pl) && !expandedPlans.has(pl.id)) {
+      return `<li class="card plan-card plan-mini" data-id="${pl.id}">
+        <button class="mini-row" data-a="expand" aria-expanded="false">
+          <i class="mini-dot" style="background:${esc(pl.color || '#0d9488')}"></i>
+          <span class="mini-title">${esc(pl.title)}</span>
+          <span class="chip done-chip">🏁 จบทริปแล้ว</span>
+          <span class="mini-caret" aria-hidden="true">▾</span>
+        </button></li>`;
+    }
     const st = planStatus(pl);
     const places = planPlaces(pl);
     const done = places.filter((p) => p.status === 'visited').length;
@@ -670,6 +685,7 @@ function renderPlans() {
           <button class="chip" data-a="members">👥 เพื่อนร่วมทาง</button>
           <button class="chip" data-a="edit">แก้ไข</button>
           ${store.isCloud && !store.isOwner(pl) ? '<button class="chip danger-chip" data-a="leave">ออกจากแผน</button>' : ''}
+          ${isFinished(pl) ? '<button class="chip" data-a="collapse" aria-expanded="true">▴ ย่อ</button>' : ''}
         </div>
       </div></li>`;
   }).join('');
@@ -683,6 +699,8 @@ $('#plan-list').addEventListener('click', (e) => {
   if (a === 'edit') openPlanForm(pl.id);
   if (a === 'members') openMembers(pl.id);
   if (a === 'visited') markPlanVisited(pl);
+  if (a === 'expand') { expandedPlans.add(pl.id); renderPlans(); }
+  if (a === 'collapse') { expandedPlans.delete(pl.id); renderPlans(); }
   if (a === 'leave' && confirm(`ออกจากแผน “${pl.title}”? แผนนี้จะหายจากรายการของคุณ`)) {
     store.deletePlan(pl.id);
     toast('ออกจากแผนแล้ว');

@@ -420,3 +420,13 @@ body[data-view="friends"] .fab { display: none; }
 .plan-card.is-fresh { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent); }
 .chip.danger-chip { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .chip.done-chip { color: var(--visited); border-color: color-mix(in srgb, var(--visited) 45%, transparent); background: color-mix(in srgb, var(--visited) 10%, var(--surface)); }
+.plan-mini { padding: 0; }
+.mini-row {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+  border: 0; background: none; text-align: left; color: var(--text);
+}
+.mini-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.mini-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-row .chip { flex: none; font-size: .78rem; padding: 3px 10px; }
+.mini-caret { color: var(--muted); flex: none; }
+.mini-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: var(--radius); }
