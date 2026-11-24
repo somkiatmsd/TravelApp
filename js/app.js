@@ -435,7 +435,7 @@ function renderCalendar() {
     const s = ymd(d);
     const { plans, visits } = eventsOn(s);
     const evs = [
-      ...plans.map((pl) => `<div class="ev" style="background:${esc(pl.color || '#0d9488')}">${esc(pl.title)}</div>`),
+      ...plans.map((pl) => `<div class="ev ${isCancelled(pl) ? 'cancelled' : ''}" style="background:${esc(pl.color || '#0d9488')}">${isCancelled(pl) ? '❌ ' : ''}${esc(pl.title)}</div>`),
       ...visits.map((p) => `<div class="ev visit">✓ ${esc(p.name)}</div>`),
     ];
     const shown = evs.slice(0, 2).join('') + (evs.length > 2 ? `<div class="more">+${evs.length - 2}</div>` : '');
@@ -644,7 +644,7 @@ function renderPlans() {
     return;
   }
   const t = todayStr();
-  const isFinished = (pl) => Boolean(pl.finishedAt); // set only by pressing "จบทริป" on that plan
+  const isFinished = isClosed;
   const active = store.plans.filter((p) => !isFinished(p));
   const upcoming = active.filter((p) => p.end >= t).sort((a, b) => a.start.localeCompare(b.start));
   const past = active.filter((p) => p.end < t).sort((a, b) => b.start.localeCompare(a.start));
@@ -656,7 +656,7 @@ function renderPlans() {
         <button class="mini-row" data-a="expand" aria-expanded="false">
           <i class="mini-dot" style="background:${esc(pl.color || '#0d9488')}"></i>
           <span class="mini-title">${esc(pl.title)}</span>
-          <span class="chip done-chip">🏁 จบทริปแล้ว</span>
+          ${closedChip(pl)}
           <span class="mini-caret" aria-hidden="true">▾</span>
         </button></li>`;
     }
@@ -668,7 +668,7 @@ function renderPlans() {
     return `<li class="card plan-card ${freshPlans.has(pl.id) ? 'is-fresh' : ''}" data-id="${pl.id}">
       <div class="plan-bar" style="background:${esc(pl.color || '#0d9488')}"></div>
       <div class="plan-body">
-        <div class="title">${esc(pl.title)}<span class="tag ${st.cls}">${st.label}</span>${freshPlans.has(pl.id) ? '<span class="tag fresh">ใหม่</span>' : ''}</div>
+        <div class="title">${esc(pl.title)}${isClosed(pl) ? closedChip(pl, 'tag') : `<span class="tag ${st.cls}">${st.label}</span>`}${freshPlans.has(pl.id) ? '<span class="tag fresh">ใหม่</span>' : ''}</div>
         ${owner ? `<div class="shared-by">${freshPlans.has(pl.id) ? '👋 ชวนโดย' : 'แชร์โดย'} ${esc(owner.name || owner.email)}</div>` : ''}
         <div class="plan-dates">📅 ${fmtRange(pl.start, pl.end)} · ${nights + 1} วัน${nights ? ` ${nights} คืน` : ''}</div>
         ${places.length ? `<ol>${places.map((p) => `<li class="${p.status === 'visited' ? 'done' : ''}">${icon(p.category)} ${esc(p.name)}</li>`).join('')}</ol>
@@ -682,10 +682,7 @@ function renderPlans() {
           <button class="chip" data-a="members">👥 เพื่อนร่วมทาง</button>
           <button class="chip" data-a="edit">แก้ไข</button>
           ${store.isCloud && !store.isOwner(pl) ? '<button class="chip danger-chip" data-a="leave">ออกจากแผน</button>' : ''}
-          ${isFinished(pl) ? '<button class="chip" data-a="collapse" aria-expanded="true">▴ ย่อ</button>' : ''}
-          ${isFinished(pl)
-            ? '<button class="chip" data-a="unfinish">↩ ยกเลิกจบทริป</button>'
-            : '<button class="chip primary" data-a="visited">🏁 จบทริป</button>'}
+          ${closeButtons(pl, places)}
         </div>
       </div></li>`;
   }).join('');
@@ -698,11 +695,16 @@ $('#plan-list').addEventListener('click', (e) => {
   if (a === 'map') showPlanOnMap(pl.id);
   if (a === 'edit') openPlanForm(pl.id);
   if (a === 'members') openMembers(pl.id);
-  if (a === 'visited') markPlanVisited(pl);
-  if (a === 'unfinish') {
+  if (a === 'finish') finishPlan(pl);
+  if (a === 'cancel-trip' && confirm(`ทริป “${pl.title}” ล่ม? ทริปจะถูกปิด และทุกคนในทริปจะเห็นว่าทริปล่ม`)) cancelPlan(pl);
+  if (a === 'reopen') {
     expandedPlans.delete(pl.id);
-    store.savePlan({ id: pl.id, finishedAt: null });
-    toast(`ยกเลิกจบทริป “${pl.title}” แล้ว`);
+    store.savePlan({ id: pl.id, finishedAt: null, outcome: null });
+    toast(`เปิดทริป “${pl.title}” อีกครั้งแล้ว`);
+  }
+  if (a === 'mine') {
+    const n = markMyPlacesVisited(pl);
+    toast(n ? `บันทึกว่าคุณไป ${n} ที่ในทริปนี้แล้ว` : 'บันทึกไว้ครบแล้ว');
   }
   if (a === 'expand') { expandedPlans.add(pl.id); renderPlans(); }
   if (a === 'collapse') { expandedPlans.delete(pl.id); renderPlans(); }
@@ -728,8 +730,30 @@ function myPlaceFor(stop) {
       && Math.abs(p.lat - stop.lat) < 0.0005 && Math.abs(p.lng - stop.lng) < 0.0005));
 }
 
-/** "จบทริป": finish this plan only, and record its places as visited for me. */
-function markPlanVisited(pl) {
+/* Closing a trip (creator only, from its first day): "จบทริป" (done) or "ทริปล่ม" (cancelled).
+   Stored on the plan (finishedAt + outcome), so everyone in the trip sees the same state. */
+const isClosed = (pl) => Boolean(pl.finishedAt);
+const isCancelled = (pl) => isClosed(pl) && pl.outcome === 'cancelled';
+const closedChip = (pl, cls = 'chip') => (isCancelled(pl)
+  ? `<span class="${cls} cancel-chip">❌ ทริปล่ม</span>`
+  : `<span class="${cls} done-chip">🏁 จบทริปแล้ว</span>`);
+const allMineVisited = (pl) => planPlaces(pl).every((s) => myPlaceFor(s)?.status === 'visited');
+
+function closeButtons(pl, places) {
+  const owner = store.isOwner(pl);
+  if (isClosed(pl)) {
+    return [
+      '<button class="chip" data-a="collapse" aria-expanded="true">▴ ย่อ</button>',
+      !isCancelled(pl) && places.length && !allMineVisited(pl) ? '<button class="chip" data-a="mine">✓ บันทึกว่าฉันไปแล้ว</button>' : '',
+      owner ? '<button class="chip" data-a="reopen">↩ เปิดทริปอีกครั้ง</button>' : '',
+    ].join('');
+  }
+  if (!owner || pl.start > todayStr()) return ''; // only the creator, and only once the trip has started
+  return '<button class="chip danger-chip" data-a="cancel-trip">❌ ทริปล่ม</button><button class="chip primary" data-a="finish">🏁 จบทริป</button>';
+}
+
+/** Record every place of the plan as visited in my own list. Returns how many were changed. */
+function markMyPlacesVisited(pl) {
   const today = todayStr();
   const when = today > pl.end ? pl.end : today; // trip already over → its last day
   let changed = 0;
@@ -744,14 +768,26 @@ function markPlanVisited(pl) {
     }
     changed++;
   });
-  // Mark this plan finished, and refresh its snapshot of my places so companions see the progress.
-  const stops = pl.placeIds.map((id) => {
-    const own = store.getPlace(id);
-    return own ? stopOf(own) : (pl.stops || []).find((s) => s.id === id);
-  }).filter(Boolean);
+  return changed;
+}
+
+/** The plan's snapshot of places, with my own places refreshed (so companions see their status). */
+const freshStops = (pl) => pl.placeIds.map((id) => {
+  const own = store.getPlace(id);
+  return own ? stopOf(own) : (pl.stops || []).find((s) => s.id === id);
+}).filter(Boolean);
+
+function finishPlan(pl) {
+  const n = markMyPlacesVisited(pl);
   expandedPlans.delete(pl.id);
-  store.savePlan({ id: pl.id, stops, finishedAt: new Date().toISOString() });
-  toast(changed ? `🏁 จบทริป “${pl.title}” แล้ว บันทึกว่าไป ${changed} ที่` : `🏁 จบทริป “${pl.title}” แล้ว`);
+  store.savePlan({ id: pl.id, stops: freshStops(pl), finishedAt: new Date().toISOString(), outcome: 'done' });
+  toast(n ? `🏁 จบทริป “${pl.title}” แล้ว บันทึกว่าไป ${n} ที่` : `🏁 จบทริป “${pl.title}” แล้ว`);
+}
+
+function cancelPlan(pl) {
+  expandedPlans.delete(pl.id);
+  store.savePlan({ id: pl.id, finishedAt: new Date().toISOString(), outcome: 'cancelled' });
+  toast(`❌ ปิดทริป “${pl.title}” ว่าทริปล่มแล้ว`);
 }
 
 /* ---------- companions (friends only) ---------- */

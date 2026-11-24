@@ -13,7 +13,7 @@ import { firebaseConfig } from './firebase-config.js';
 const SDK = 'https://www.gstatic.com/firebasejs/10.12.2';
 export const cloudConfigured = Boolean(firebaseConfig && firebaseConfig.apiKey && firebaseConfig.projectId);
 
-const PLAN_CONTENT = ['title', 'start', 'end', 'color', 'note', 'placeIds', 'stops', 'finishedAt'];
+const PLAN_CONTENT = ['title', 'start', 'end', 'color', 'note', 'placeIds', 'stops', 'finishedAt', 'outcome'];
 
 /** Profile defaults taken from the Google account. */
 export function profileFromUser(user) {

@@ -430,3 +430,7 @@ body[data-view="friends"] .fab { display: none; }
 .mini-row .chip { flex: none; font-size: .78rem; padding: 3px 10px; }
 .mini-caret { color: var(--muted); flex: none; }
 .mini-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: var(--radius); }
+.cancel-chip { color: var(--danger) !important; border-color: color-mix(in srgb, var(--danger) 40%, transparent) !important; background: color-mix(in srgb, var(--danger) 8%, var(--surface)) !important; }
+.plan-card .tag.done-chip, .plan-card .tag.cancel-chip { border: 1px solid; }
+.plan-card .tag.done-chip { color: var(--visited); background: color-mix(in srgb, var(--visited) 10%, var(--surface)); }
+.cal-cell .ev.cancelled { opacity: .55; text-decoration: line-through; }
