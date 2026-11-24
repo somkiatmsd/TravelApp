@@ -45,6 +45,20 @@ python3 -m http.server 8080
 - สถานที่ส่วนตัวยังเป็นส่วนตัว เพื่อนร่วมทางเห็นเฉพาะสถานที่ที่อยู่ในแผน อีเมลไม่แสดงให้ใครเห็น
 - รูปโปรไฟล์ถูกย่อเหลือ 320px และเก็บใน Firestore (ไม่ต้องใช้ Firebase Storage)
 
+## ค้นหาสถานที่ด้วย Google (ไม่บังคับ)
+
+แผนที่ยังเป็น OpenStreetMap (ใช้ออฟไลน์ได้) แต่ช่องค้นหาจะใช้ Google Places เมื่อใส่ API key ใน `js/maps-config.js`
+ถ้าไม่มี key หรือ Google ใช้ไม่ได้ จะค้นหาด้วย OpenStreetMap แทนอัตโนมัติ
+
+1. https://console.cloud.google.com → สร้างโปรเจกต์ใหม่ (แยกจาก Firebase เพื่อให้ Firebase อยู่แผนฟรีต่อ)
+2. ผูก Billing account (ต้องใช้บัตร แต่มีโควตาฟรีรายเดือน)
+3. เปิดใช้ **Maps JavaScript API** และ **Places API (New)**
+4. Credentials → Create credentials → API key แล้วจำกัด key:
+   - Application restrictions: Websites → `https://somkiatmsd.github.io/*`
+   - API restrictions: Maps JavaScript API, Places API (New)
+5. ตั้ง Budget alert และจำกัดโควตารายวันของ Places API กันค่าใช้จ่ายเกิน
+6. ใส่ key ใน `js/maps-config.js`
+
 ### ทดสอบกับ Firebase Emulator
 ใส่ `useEmulators: true` ใน `js/firebase-config.js` แล้วรัน
 `npx firebase-tools emulators:start --project demo-wanderpin --only auth,firestore`
@@ -57,6 +71,8 @@ js/store.js            เก็บข้อมูล places / plans (ในเ�
 js/cloud.js            เข้าระบบ Google + Firestore (สถานที่ แผน โปรไฟล์ เพื่อน)
 js/social.js           โปรไฟล์ แท็บเพื่อน หน้าโปรไฟล์สาธารณะ
 js/ui.js               ฟังก์ชันช่วยเรื่องหน้าจอ
+js/search.js           ค้นหาสถานที่ (Google Places หรือ OpenStreetMap)
+js/maps-config.js      Google Maps API key (ไม่บังคับ)
 js/firebase-config.js  ค่าโปรเจกต์ Firebase
 firestore.rules        กฎความปลอดภัยของฐานข้อมูล
 js/app.js              แผนที่ รายการ ปฏิทิน แผน

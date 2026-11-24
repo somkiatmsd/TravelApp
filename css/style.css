@@ -414,3 +414,5 @@ legend small { font-size: .75rem; }
 .add-friends { margin: 4px 0 10px; }
 .add-friends h3 { font-size: .9rem; margin: 6px 2px 8px; }
 body[data-view="friends"] .fab { display: none; }
+.search-results li.credit { cursor: default; font-size: .72rem; color: var(--muted); text-align: right; padding: 6px 10px 4px; }
+.search-results li.credit:hover { background: none; }

@@ -1,6 +1,7 @@
 import { store, loadLocal } from './store.js';
 import { initCloud, cloudConfigured, AUTH_ERRORS } from './cloud.js';
 import { $, $$, esc, toast, avatar } from './ui.js';
+import { searchPlaces, googleSearchEnabled, directionsUrl, googleMapsUrl } from './search.js';
 import { social, renderFriendsView, bindFriendsView, bindUserDialog, openUser, renderProfileEditor, resetProfileDraft } from './social.js';
 
 /* ---------- helpers ---------- */
@@ -23,9 +24,8 @@ const PLAN_COLORS = ['#0d9488', '#6366f1', '#e11d48', '#f59e0b', '#0ea5e9', '#a8
 /** Places of a plan, in order. Own places are live; a companion's places come from the plan's snapshot. */
 const planPlaces = (pl) =>
   pl.placeIds.map((id) => store.getPlace(id) || (pl.stops || []).find((s) => s.id === id)).filter(Boolean);
-const stopOf = (p) => ({ id: p.id, name: p.name, category: p.category, status: p.status, visitedAt: p.visitedAt ?? null, lat: p.lat ?? null, lng: p.lng ?? null });
+const stopOf = (p) => ({ id: p.id, name: p.name, category: p.category, status: p.status, visitedAt: p.visitedAt ?? null, lat: p.lat ?? null, lng: p.lng ?? null, gmapsId: p.gmapsId || null });
 
-const directionsUrl = (p) => `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
 
 /* ---------- routing / tabs ---------- */
 let current = 'map';
@@ -70,6 +70,7 @@ function placePopup(p) {
       ${own ? `<button class="chip" data-a="edit">แก้ไข</button>
       <button class="chip primary" data-a="toggle">${p.status === 'visited' ? 'ยังไม่ได้ไป' : '✓ ไปแล้ว'}</button>` : ''}
       <a class="chip" href="${directionsUrl(p)}" target="_blank" rel="noopener">นำทาง</a>
+      <a class="chip" href="${googleMapsUrl(p)}" target="_blank" rel="noopener">Google Maps</a>
     </div>`;
   div.addEventListener('click', (e) => {
     const a = e.target.closest('[data-a]')?.dataset.a;
@@ -117,6 +118,7 @@ map.on('click', (e) => {
     document.body.classList.remove('picking');
     $('.map-hint').textContent = 'แตะบนแผนที่เพื่อปักหมุด';
     setCoords(lat, lng);
+    formPlace.dataset.gmapsId = '';
     clearTemp();
     tempMarker = L.marker([lat, lng], { icon: pinIcon('temp') }).addTo(map);
     $('#dlg-place').showModal();
@@ -154,13 +156,7 @@ function getPosition() {
   });
 }
 
-/* search (OpenStreetMap Nominatim) */
-async function geocode(q) {
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=th&q=${encodeURIComponent(q)}`;
-  const r = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!r.ok) throw new Error('search failed');
-  return r.json();
-}
+/* search: Google Places when configured, otherwise OpenStreetMap (see search.js) */
 async function reverseGeocode(lat, lng) {
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&accept-language=th&lat=${lat}&lon=${lng}`);
@@ -171,37 +167,38 @@ async function reverseGeocode(lat, lng) {
 }
 
 const results = $('#search-results');
+if (googleSearchEnabled) $('#search-input').placeholder = 'ค้นหาสถานที่ ร้าน คาเฟ่ ด้วย Google…';
 $('#search-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const q = $('#search-input').value.trim();
   if (!q) return;
+  $('#search-input').blur();
   results.hidden = false;
   results.innerHTML = '<li>กำลังค้นหา…</li>';
   try {
-    const items = await geocode(q);
-    if (!items.length) { results.innerHTML = '<li>ไม่พบสถานที่</li>'; return; }
-    results.innerHTML = items.map((it, i) => {
-      const [first, ...rest] = it.display_name.split(',');
-      return `<li tabindex="0" data-i="${i}">${esc(it.name || first)}<small>${esc(rest.join(',').trim())}</small></li>`;
-    }).join('');
+    const c = map.getCenter();
+    const { source, items } = await searchPlaces(q, { lat: c.lat, lng: c.lng });
+    const credit = `<li class="credit">${source === 'google' ? 'ผลการค้นหาโดย Google' : 'ผลการค้นหาจาก OpenStreetMap'}</li>`;
+    if (!items.length) { results.innerHTML = '<li>ไม่พบสถานที่ ลองพิมพ์ชื่อให้ละเอียดขึ้น เช่น ใส่ชื่อจังหวัด</li>' + credit; return; }
+    results.innerHTML = items.map((it, i) =>
+      `<li tabindex="0" data-i="${i}">${it.category ? icon(it.category) + ' ' : ''}${esc(it.name)}<small>${esc(it.address)}</small></li>`).join('') + credit;
     results.onclick = (ev) => {
       const li = ev.target.closest('li[data-i]');
       if (!li) return;
       const it = items[+li.dataset.i];
-      const lat = +it.lat, lng = +it.lon;
       results.hidden = true;
-      map.setView([lat, lng], 15);
+      map.setView([it.lat, it.lng], 16);
       clearTemp();
       const div = document.createElement('div');
       div.className = 'popup';
-      const nm = it.name || it.display_name.split(',')[0];
-      div.innerHTML = `<h4>${esc(nm)}</h4><p>${esc(it.display_name)}</p>
-        <div class="row"><button class="chip primary">+ เพิ่มสถานที่</button></div>`;
+      div.innerHTML = `<h4>${it.category ? icon(it.category) + ' ' : ''}${esc(it.name)}</h4><p>${esc(it.address)}</p>
+        <div class="row"><button class="chip primary">+ เพิ่มสถานที่</button>
+        <a class="chip" href="${googleMapsUrl(it)}" target="_blank" rel="noopener">Google Maps</a></div>`;
       div.querySelector('button').addEventListener('click', () => {
         map.closePopup();
-        openPlaceForm(null, { lat, lng, name: nm });
+        openPlaceForm(null, it);
       });
-      tempMarker = L.marker([lat, lng], { icon: pinIcon('temp') }).addTo(map).bindPopup(div).openPopup();
+      tempMarker = L.marker([it.lat, it.lng], { icon: pinIcon('temp') }).addTo(map).bindPopup(div).openPopup();
     };
   } catch {
     results.innerHTML = '<li>ค้นหาไม่สำเร็จ (ต้องเชื่อมต่ออินเทอร์เน็ต)</li>';
@@ -264,7 +261,9 @@ function openPlaceForm(id, preset = {}) {
   $('#place-form-title').textContent = p ? 'แก้ไขสถานที่' : 'เพิ่มสถานที่';
   $('#btn-delete-place').hidden = !p;
   formPlace.name.value = p?.name || preset.name || '';
-  formPlace.category.value = p?.category || 'ธรรมชาติ';
+  formPlace.category.value = p?.category || preset.category || 'ธรรมชาติ';
+  // Google place ID (from search) lets "Google Maps" open the exact place; cleared if the pin is moved.
+  formPlace.dataset.gmapsId = p ? p.gmapsId || '' : preset.gmapsId || '';
   formPlace.status.value = p?.status || 'want';
   formPlace.visitedAt.value = p?.visitedAt || '';
   formPlace.note.value = p?.note || '';
@@ -283,7 +282,7 @@ $('#btn-pick-on-map').addEventListener('click', () => {
 });
 $('#btn-use-gps').addEventListener('click', () => {
   $('#coords-text').textContent = 'กำลังหาตำแหน่ง…';
-  getPosition().then(({ lat, lng }) => setCoords(lat, lng))
+  getPosition().then(({ lat, lng }) => { setCoords(lat, lng); formPlace.dataset.gmapsId = ''; })
     .catch(() => { setCoords(formPlace.lat.value, formPlace.lng.value); toast('ไม่สามารถระบุตำแหน่งได้'); });
 });
 
@@ -303,6 +302,7 @@ formPlace.addEventListener('submit', (e) => {
     priority: +f.priority.value || 2,
     note: f.note.value.trim(),
     lat, lng,
+    gmapsId: f.dataset.gmapsId || null,
   });
   dlgPlace.close();
   clearTemp();
