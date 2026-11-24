@@ -644,7 +644,7 @@ function renderPlans() {
     return;
   }
   const t = todayStr();
-  const isFinished = (pl) => pl.placeIds.length > 0 && planDoneForMe(pl);
+  const isFinished = (pl) => Boolean(pl.finishedAt); // set only by pressing "จบทริป" on that plan
   const active = store.plans.filter((p) => !isFinished(p));
   const upcoming = active.filter((p) => p.end >= t).sort((a, b) => a.start.localeCompare(b.start));
   const past = active.filter((p) => p.end < t).sort((a, b) => b.start.localeCompare(a.start));
@@ -683,9 +683,9 @@ function renderPlans() {
           <button class="chip" data-a="edit">แก้ไข</button>
           ${store.isCloud && !store.isOwner(pl) ? '<button class="chip danger-chip" data-a="leave">ออกจากแผน</button>' : ''}
           ${isFinished(pl) ? '<button class="chip" data-a="collapse" aria-expanded="true">▴ ย่อ</button>' : ''}
-          ${places.length ? (planDoneForMe(pl)
-            ? '<span class="chip done-chip">🏁 จบทริปแล้ว</span>'
-            : '<button class="chip primary" data-a="visited">🏁 จบทริป</button>') : ''}
+          ${isFinished(pl)
+            ? '<button class="chip" data-a="unfinish">↩ ยกเลิกจบทริป</button>'
+            : '<button class="chip primary" data-a="visited">🏁 จบทริป</button>'}
         </div>
       </div></li>`;
   }).join('');
@@ -699,6 +699,11 @@ $('#plan-list').addEventListener('click', (e) => {
   if (a === 'edit') openPlanForm(pl.id);
   if (a === 'members') openMembers(pl.id);
   if (a === 'visited') markPlanVisited(pl);
+  if (a === 'unfinish') {
+    expandedPlans.delete(pl.id);
+    store.savePlan({ id: pl.id, finishedAt: null });
+    toast(`ยกเลิกจบทริป “${pl.title}” แล้ว`);
+  }
   if (a === 'expand') { expandedPlans.add(pl.id); renderPlans(); }
   if (a === 'collapse') { expandedPlans.delete(pl.id); renderPlans(); }
   if (a === 'leave' && confirm(`ออกจากแผน “${pl.title}”? แผนนี้จะหายจากรายการของคุณ`)) {
@@ -722,8 +727,8 @@ function myPlaceFor(stop) {
     || (p.name === stop.name && typeof p.lat === 'number' && typeof stop.lat === 'number'
       && Math.abs(p.lat - stop.lat) < 0.0005 && Math.abs(p.lng - stop.lng) < 0.0005));
 }
-const planDoneForMe = (pl) => planPlaces(pl).every((s) => myPlaceFor(s)?.status === 'visited');
 
+/** "จบทริป": finish this plan only, and record its places as visited for me. */
 function markPlanVisited(pl) {
   const today = todayStr();
   const when = today > pl.end ? pl.end : today; // trip already over → its last day
@@ -739,13 +744,14 @@ function markPlanVisited(pl) {
     }
     changed++;
   });
-  // Refresh the plan's snapshot of my own places so companions see the progress.
+  // Mark this plan finished, and refresh its snapshot of my places so companions see the progress.
   const stops = pl.placeIds.map((id) => {
     const own = store.getPlace(id);
     return own ? stopOf(own) : (pl.stops || []).find((s) => s.id === id);
   }).filter(Boolean);
-  if (store.isCloud && stops.some((s) => store.getPlace(s.id))) store.savePlan({ id: pl.id, stops });
-  toast(changed ? `🏁 จบทริป “${pl.title}” แล้ว บันทึกว่าไป ${changed} ที่` : `🏁 ทริป “${pl.title}” จบแล้ว`);
+  expandedPlans.delete(pl.id);
+  store.savePlan({ id: pl.id, stops, finishedAt: new Date().toISOString() });
+  toast(changed ? `🏁 จบทริป “${pl.title}” แล้ว บันทึกว่าไป ${changed} ที่` : `🏁 จบทริป “${pl.title}” แล้ว`);
 }
 
 /* ---------- companions (friends only) ---------- */
