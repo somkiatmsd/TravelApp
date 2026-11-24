@@ -677,15 +677,15 @@ function renderPlans() {
         ${pl.note ? `<p class="note">${esc(pl.note)}</p>` : ''}
         ${membersRow(pl)}
         <div class="row">
-          ${places.length ? (planDoneForMe(pl)
-            ? '<span class="chip done-chip">🏁 จบทริปแล้ว</span>'
-            : '<button class="chip primary" data-a="visited">🏁 จบทริป</button>') : ''}
           <button class="chip" data-a="map">ดูเส้นทาง</button>
           <button class="chip" data-a="cal">ดูในปฏิทิน</button>
           <button class="chip" data-a="members">👥 เพื่อนร่วมทาง</button>
           <button class="chip" data-a="edit">แก้ไข</button>
           ${store.isCloud && !store.isOwner(pl) ? '<button class="chip danger-chip" data-a="leave">ออกจากแผน</button>' : ''}
           ${isFinished(pl) ? '<button class="chip" data-a="collapse" aria-expanded="true">▴ ย่อ</button>' : ''}
+          ${places.length ? (planDoneForMe(pl)
+            ? '<span class="chip done-chip">🏁 จบทริปแล้ว</span>'
+            : '<button class="chip primary" data-a="visited">🏁 จบทริป</button>') : ''}
         </div>
       </div></li>`;
   }).join('');
