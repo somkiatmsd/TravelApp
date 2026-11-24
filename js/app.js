@@ -726,6 +726,7 @@ $('#btn-leave-plan').addEventListener('click', () => {
 const dlgMenu = $('#dlg-menu');
 $('#btn-menu').addEventListener('click', () => {
   const v = store.places.filter((p) => p.status === 'visited').length;
+  renderBadgeSetting();
   $('#stats').textContent = `สถานที่ทั้งหมด ${store.places.length} · ไปแล้ว ${v} · ยังไม่ได้ไป ${store.places.length - v} · แผน ${store.plans.length}`;
   dlgMenu.showModal();
 });
@@ -828,7 +829,38 @@ function renderFriendsBadge() {
   const b = $('#friends-badge');
   b.hidden = !n;
   b.textContent = n > 9 ? '9+' : n;
+  setIconBadge(n);
 }
+
+/* Red number on the home-screen icon (App Badging API).
+   iPhone: works for an app added to the Home Screen (iOS 16.4+) after notifications are allowed. */
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const canBadge = 'setAppBadge' in navigator;
+function setIconBadge(n) {
+  if (!canBadge) return;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+function renderBadgeSetting() {
+  const btn = $('#btn-badge');
+  const hint = $('#badge-hint');
+  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  btn.hidden = !(canBadge && perm === 'default');
+  hint.hidden = false;
+  if (canBadge && perm === 'granted') hint.textContent = '🔴 เปิดตัวเลขแจ้งเตือนบนไอคอนแล้ว: แสดงจำนวนคำขอเป็นเพื่อนที่รออยู่';
+  else if (canBadge && perm === 'denied') hint.textContent = 'ปิดการแจ้งเตือนไว้ เปิดได้ที่ การตั้งค่า → การแจ้งเตือน → Wanderpin';
+  else if (isIOS && !isStandalone()) hint.textContent = 'ติดตั้งแอปบนหน้าจอโฮมก่อน (ปุ่มแชร์ → เพิ่มไปยังหน้าจอโฮม) จึงจะเปิดตัวเลขแจ้งเตือนบนไอคอนได้';
+  else if (!canBadge) hint.textContent = 'เครื่องหรือเบราว์เซอร์นี้แสดงตัวเลขบนไอคอนแอปไม่ได้';
+  else hint.hidden = true;
+}
+$('#btn-badge').addEventListener('click', async () => {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm === 'granted') { toast('เปิดตัวเลขแจ้งเตือนบนไอคอนแล้ว'); renderFriendsBadge(); }
+    else toast('ไม่ได้อนุญาตการแจ้งเตือน');
+  } catch { toast('เปิดการแจ้งเตือนไม่ได้'); }
+  renderBadgeSetting();
+});
 
 function renderAccount() {
   const body = $('#account-body');

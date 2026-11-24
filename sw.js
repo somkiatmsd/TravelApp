@@ -1,5 +1,5 @@
 // Service worker: offline app shell + cached map tiles.
-const VERSION = 'v7';
+const VERSION = 'v8';
 const SHELL = `wanderpin-shell-${VERSION}`;
 const TILES = 'wanderpin-tiles';
 const MAX_TILES = 1500;
