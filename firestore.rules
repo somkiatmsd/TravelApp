@@ -1,27 +1,37 @@
 rules_version = '2';
 
 // Wanderpin security rules
-// - Each user's places are private to that user.
-// - A plan is visible to its members. Only the owner can invite or remove members.
-// - Members can edit the trip content and can leave the plan.
-// - Someone invited by email joins by adding themselves (only if their email is in pendingEmails).
+// - Places are private to their owner.
+// - Profiles: public ones are visible to every signed-in user; private ones only to friends.
+// - Friendship needs a request and the other person's approval.
+// - A plan is visible to its members. The owner can only add people who are their friends.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() { return request.auth != null; }
     function me() { return request.auth.uid; }
-    function myEmail() {
-      return request.auth.token.email is string ? request.auth.token.email.lower() : '';
-    }
+    function isFriend(a, b) { return exists(/databases/$(database)/documents/profiles/$(a)/friends/$(b)); }
     function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
     function membersChangedOnlyForMe() {
       return request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([me()]);
     }
+    function optString(d, k, max) { return !(k in d) || (d[k] is string && d[k].size() <= max); }
+
+    function validProfile(d) {
+      return d.keys().hasOnly(['name', 'nameLower', 'photo', 'thumb', 'bio', 'isPublic', 'stats', 'createdAt', 'updatedAt'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 60
+        && d.isPublic is bool
+        && optString(d, 'nameLower', 60)
+        && optString(d, 'photo', 300000)
+        && optString(d, 'thumb', 30000)
+        && optString(d, 'bio', 300)
+        && (!('stats' in d) || d.stats is map);
+    }
+
     function validPlan(d) {
       return d.title is string && d.title.size() > 0 && d.title.size() <= 200
         && d.start is string && d.end is string
         && d.memberIds is list && d.memberIds.size() <= 50
-        && d.pendingEmails is list && d.pendingEmails.size() <= 50
         && d.members is map;
     }
 
@@ -29,43 +39,78 @@ service cloud.firestore {
       allow read, write: if signedIn() && me() == userId;
     }
 
+    match /profiles/{uid} {
+      allow read: if signedIn() && (resource.data.isPublic == true || me() == uid || isFriend(uid, me()));
+      allow create, update: if signedIn() && me() == uid && validProfile(request.resource.data);
+      allow delete: if signedIn() && me() == uid;
+
+      // profiles/{uid}/friends/{fid}: fid is a friend of uid.
+      // Only the person who received a request can create the two friendship docs (when accepting).
+      match /friends/{fid} {
+        allow read: if signedIn() && me() == uid;
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['since'])
+          && (
+            (me() == uid && exists(/databases/$(database)/documents/friendRequests/$(fid + '_' + uid)))
+            || (me() == fid && exists(/databases/$(database)/documents/friendRequests/$(uid + '_' + fid)))
+          );
+        allow delete: if signedIn() && (me() == uid || me() == fid);
+      }
+    }
+
+    // friendRequests/{from}_{to}
+    match /friendRequests/{rid} {
+      allow read: if signedIn() && (resource.data.from == me() || resource.data.to == me());
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['from', 'to', 'fromName', 'fromThumb', 'createdAt'])
+        && request.resource.data.from == me()
+        && request.resource.data.to is string
+        && request.resource.data.to != me()
+        && rid == me() + '_' + request.resource.data.to
+        && request.resource.data.fromName is string && request.resource.data.fromName.size() <= 60
+        && optString(request.resource.data, 'fromThumb', 30000)
+        && !isFriend(me(), request.resource.data.to)
+        && get(/databases/$(database)/documents/profiles/$(request.resource.data.to)).data.isPublic == true;
+      allow delete: if signedIn() && (resource.data.from == me() || resource.data.to == me());
+    }
+
     match /plans/{planId} {
-      allow read: if signedIn() && (
-        me() in resource.data.memberIds
-        || (myEmail() != '' && myEmail() in resource.data.pendingEmails)
-      );
+      allow read: if signedIn() && me() in resource.data.memberIds;
 
       allow create: if signedIn()
         && request.resource.data.ownerId == me()
         && request.resource.data.memberIds == [me()]
-        && request.resource.data.pendingEmails == []
         && validPlan(request.resource.data);
 
       allow delete: if signedIn() && resource.data.ownerId == me();
 
       allow update: if signedIn() && validPlan(request.resource.data) && (
-        // owner: anything, but cannot hand over ownership or drop themself
+        // owner: keep ownership and stay a member; members can be removed,
+        // and can be added one at a time (named in lastAdded) only if they are the owner's friend
         (resource.data.ownerId == me()
           && request.resource.data.ownerId == me()
-          && me() in request.resource.data.memberIds)
+          && me() in request.resource.data.memberIds
+          && (
+            resource.data.memberIds.toSet().hasAll(request.resource.data.memberIds)
+            || (request.resource.data.lastAdded is string
+              && request.resource.data.memberIds.toSet() == resource.data.memberIds.toSet().union([request.resource.data.lastAdded].toSet())
+              && isFriend(me(), request.resource.data.lastAdded))
+          ))
 
-        // member: edit trip content only
+        // member: edit trip content
         || (me() in resource.data.memberIds
           && changed().hasOnly(['title', 'start', 'end', 'color', 'note', 'placeIds', 'stops', 'updatedAt']))
+
+        // member: refresh own name/photo shown in the plan
+        || (me() in resource.data.memberIds
+          && changed().hasOnly(['members', 'updatedAt'])
+          && membersChangedOnlyForMe())
 
         // member (not owner): leave the plan
         || (me() in resource.data.memberIds
           && resource.data.ownerId != me()
           && changed().hasOnly(['memberIds', 'members', 'updatedAt'])
           && request.resource.data.memberIds.toSet() == resource.data.memberIds.toSet().difference([me()].toSet())
-          && membersChangedOnlyForMe())
-
-        // invited by email: join (add self, remove own email from pending)
-        || (myEmail() != ''
-          && myEmail() in resource.data.pendingEmails
-          && changed().hasOnly(['memberIds', 'members', 'pendingEmails', 'updatedAt'])
-          && request.resource.data.memberIds.toSet() == resource.data.memberIds.toSet().union([me()].toSet())
-          && request.resource.data.pendingEmails.toSet() == resource.data.pendingEmails.toSet().difference([myEmail()].toSet())
           && membersChangedOnlyForMe())
       );
     }

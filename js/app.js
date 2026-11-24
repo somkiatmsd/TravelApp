@@ -1,12 +1,9 @@
 import { store, loadLocal } from './store.js';
-import { initCloud, cloudConfigured, AUTH_ERRORS, lowerEmail, profileOf } from './cloud.js';
+import { initCloud, cloudConfigured, AUTH_ERRORS } from './cloud.js';
+import { $, $$, esc, toast, avatar } from './ui.js';
+import { social, renderFriendsView, bindFriendsView, bindUserDialog, openUser, renderProfileEditor, resetProfileDraft } from './social.js';
 
 /* ---------- helpers ---------- */
-const $ = (s, el = document) => el.querySelector(s);
-const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const esc = (s = '') =>
-  String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseYmd = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -23,48 +20,24 @@ const CAT_ICON = {
 const icon = (cat) => CAT_ICON[cat] || '📍';
 const PLAN_COLORS = ['#0d9488', '#6366f1', '#e11d48', '#f59e0b', '#0ea5e9', '#a855f7', '#84cc16', '#64748b'];
 
-function toast(msg) {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove('show'), 2200);
-}
-
 /** Places of a plan, in order. Own places are live; a companion's places come from the plan's snapshot. */
 const planPlaces = (pl) =>
   pl.placeIds.map((id) => store.getPlace(id) || (pl.stops || []).find((s) => s.id === id)).filter(Boolean);
 const stopOf = (p) => ({ id: p.id, name: p.name, category: p.category, status: p.status, visitedAt: p.visitedAt ?? null, lat: p.lat ?? null, lng: p.lng ?? null });
-
-const initials = (name = '?') => [...name.trim()][0]?.toUpperCase() || '?';
-function avatar(m, cls = '') {
-  const title = esc(m.name || m.email || '');
-  if (m.photo) return `<img class="avatar ${cls}" src="${esc(m.photo)}" alt="" title="${title}" data-initial="${esc(initials(m.name || m.email))}" referrerpolicy="no-referrer">`;
-  return `<span class="avatar ${cls}" title="${title}">${esc(initials(m.name || m.email))}</span>`;
-}
-
-// Profile photo failed to load (offline, expired link): show the initial instead.
-document.addEventListener('error', (e) => {
-  const img = e.target;
-  if (!(img instanceof HTMLImageElement) || !img.classList.contains('avatar')) return;
-  const span = document.createElement('span');
-  span.className = img.className;
-  span.title = img.title;
-  span.textContent = img.dataset.initial || '?';
-  img.replaceWith(span);
-}, true);
 
 const directionsUrl = (p) => `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
 
 /* ---------- routing / tabs ---------- */
 let current = 'map';
 function go(view) {
-  if (!['map', 'list', 'calendar', 'plans'].includes(view)) view = 'map';
+  if (!['map', 'list', 'calendar', 'plans', 'friends'].includes(view)) view = 'map';
   current = view;
+  document.body.dataset.view = view;
   $$('.view').forEach((v) => (v.hidden = v.dataset.view !== view));
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.go === view));
   if (view === 'map') setTimeout(() => map.invalidateSize(), 0);
   if (view === 'calendar') renderCalendar();
+  if (view === 'friends') { renderFriendsView(); social.loadDirectory(); }
   if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
 }
 $$('.tab').forEach((t) => t.addEventListener('click', () => go(t.dataset.go)));
@@ -599,22 +572,24 @@ function planStatus(pl) {
   return { label: days === 1 ? 'พรุ่งนี้' : `อีก ${days} วัน`, cls: '' };
 }
 
-/** Members of a plan: [{uid, name, email, photo, owner, me}] owner first. */
+/** Members of a plan: [{uid, name, thumb, owner, me}] owner first. */
 function planMembers(pl) {
   const members = pl.members || {};
   return (pl.memberIds || [])
-    .map((id) => ({ uid: id, ...(members[id] || (store.user?.uid === id ? profileOf(store.user) : { name: 'สมาชิก' })), owner: id === pl.ownerId, me: id === store.user?.uid }))
+    .map((id) => {
+      const live = id === social.uid ? social.me : social.friendProfile(id);
+      const snap = members[id] || {};
+      return { uid: id, name: live?.name || snap.name || 'สมาชิก', thumb: live?.thumb ?? snap.thumb ?? '', owner: id === pl.ownerId, me: id === social.uid };
+    })
     .sort((a, b) => b.owner - a.owner);
 }
+const memberFace = (m) => ({ name: m.name, photo: m.thumb });
 
 function membersRow(pl) {
   if (!store.isCloud) return '';
   const ms = planMembers(pl);
-  const pending = pl.pendingEmails || [];
-  const faces = ms.slice(0, 5).map((m) => avatar(m)).join('') + pending.slice(0, 3).map((e) => avatar({ email: e }, 'pending')).join('');
-  const label = ms.length > 1 || pending.length
-    ? `${ms.length} คน${pending.length ? ` · รอเข้าร่วม ${pending.length}` : ''}`
-    : 'ยังไม่มีเพื่อนร่วมทาง';
+  const faces = ms.slice(0, 6).map((m) => avatar(memberFace(m))).join('');
+  const label = ms.length > 1 ? `${ms.length} คน` : 'ยังไม่มีเพื่อนร่วมทาง';
   return `<div class="avatars" data-a="members" role="button" tabindex="0">${faces}<span class="label">${label}</span></div>`;
 }
 
@@ -668,15 +643,13 @@ $('#plan-list').addEventListener('click', (e) => {
   }
 });
 
-/* ---------- companions ---------- */
+/* ---------- companions (friends only) ---------- */
 const dlgMembers = $('#dlg-members');
 let membersPlanId = null;
 
 function openMembers(planId) {
   if (!store.isCloud) {
-    openAccount(cloudConfigured
-      ? 'เข้าสู่ระบบก่อน เพื่อชวนเพื่อนร่วมทางและแชร์แผนนี้'
-      : 'ระบบเพื่อนร่วมทางยังไม่ได้เปิดใช้');
+    openAccount(cloudConfigured ? 'เข้าสู่ระบบก่อน เพื่อชวนเพื่อนมาร่วมแผนนี้' : 'ระบบเพื่อนร่วมทางยังไม่ได้เปิดใช้');
     return;
   }
   membersPlanId = planId;
@@ -689,64 +662,55 @@ function renderMembers() {
   if (!pl) { dlgMembers.close(); return; }
   const owner = store.isOwner(pl);
   $('#members-plan').textContent = `${pl.title} · ${fmtRange(pl.start, pl.end)}`;
-  const rows = planMembers(pl).map((m) => `<li>
-      ${avatar(m)}
-      <div class="who"><b>${esc(m.name || m.email)}${m.me ? ' (คุณ)' : ''}</b><small>${esc(m.email || '')}</small></div>
+  const ms = planMembers(pl);
+  $('#member-list').innerHTML = ms.map((m) => `<li data-user="${esc(m.uid)}">
+      ${avatar(memberFace(m))}
+      <div class="who"><b>${esc(m.name)}${m.me ? ' (คุณ)' : ''}</b><small>${m.me ? '' : social.isFriend(m.uid) ? 'เพื่อนของคุณ' : 'เพื่อนของเจ้าของแผน'}</small></div>
       ${m.owner ? '<span class="role owner">เจ้าของแผน</span>' : '<span class="role">สมาชิก</span>'}
-      ${owner && !m.owner ? `<button class="remove" data-remove="${esc(m.uid)}" aria-label="ลบ ${esc(m.name)}">ลบ</button>` : ''}
-    </li>`);
-  const pend = (pl.pendingEmails || []).map((e) => `<li>
-      ${avatar({ email: e }, 'pending')}
-      <div class="who"><b>${esc(e)}</b><small>ยังไม่ได้เข้าระบบ</small></div>
-      <span class="role">รอเข้าร่วม</span>
-      ${owner ? `<button class="remove" data-cancel="${esc(e)}" aria-label="ยกเลิกคำเชิญ ${esc(e)}">ยกเลิก</button>` : ''}
-    </li>`);
-  $('#member-list').innerHTML = [...rows, ...pend].join('');
-  $('#form-invite').hidden = !owner;
+      ${owner && !m.owner ? `<button class="remove" data-remove="${esc(m.uid)}" aria-label="ลบ ${esc(m.name)} ออกจากแผน">ลบ</button>` : ''}
+    </li>`).join('');
+
+  const add = $('#member-add');
+  if (!owner) {
+    add.innerHTML = '<p class="muted small">เฉพาะเจ้าของแผนที่เพิ่มหรือลบสมาชิกได้</p>';
+  } else {
+    const candidates = social.friends.filter((f) => !(pl.memberIds || []).includes(f.uid));
+    add.innerHTML = `<div class="add-friends"><h3>ชวนเพื่อนเข้าแผน</h3>${
+      candidates.length
+        ? `<ul class="people">${candidates.map((f) => `<li class="person" data-user="${esc(f.uid)}">
+            ${avatar({ name: f.name, photo: f.thumb })}
+            <div class="who"><b>${esc(f.name)}</b><small>${f.isPublic ? 'สาธารณะ' : 'ส่วนตัว'}</small></div>
+            <div class="acts"><button class="chip primary" data-add="${esc(f.uid)}">+ เพิ่ม</button></div></li>`).join('')}</ul>`
+        : `<p class="muted small">${social.friends.length ? 'เพื่อนทุกคนอยู่ในแผนนี้แล้ว' : 'ชวนได้เฉพาะเพื่อน ยังไม่มีเพื่อนเลย'}</p>
+           <button class="btn" data-go-friends>ไปหน้าเพื่อนเพื่อค้นหาและเพิ่มเพื่อน</button>`
+    }</div>`;
+  }
   $('#btn-leave-plan').hidden = owner;
 }
 
-$('#member-list').addEventListener('click', async (e) => {
+dlgMembers.addEventListener('click', async (e) => {
   const pl = store.getPlan(membersPlanId);
+  if (!pl) return;
   const rm = e.target.closest('[data-remove]')?.dataset.remove;
-  const cancel = e.target.closest('[data-cancel]')?.dataset.cancel;
+  const addId = e.target.closest('[data-add]')?.dataset.add;
   try {
     if (rm) {
       const m = planMembers(pl).find((x) => x.uid === rm);
       if (!confirm(`ลบ ${m?.name || 'สมาชิก'} ออกจากแผน?`)) return;
       await store.removeMember(pl.id, rm);
       toast('ลบสมาชิกแล้ว');
+      return;
     }
-    if (cancel) { await store.cancelInvite(pl.id, cancel); toast('ยกเลิกคำเชิญแล้ว'); }
-  } catch (err) { toast(cloudError(err)); }
-});
-
-$('#form-invite').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const pl = store.getPlan(membersPlanId);
-  const email = lowerEmail($('#invite-email').value);
-  if (!pl || !email) return;
-  if (planMembers(pl).some((m) => m.email === email)) { toast('คนนี้อยู่ในแผนแล้ว'); return; }
-  if ((pl.pendingEmails || []).includes(email)) { toast('เชิญคนนี้ไว้แล้ว'); return; }
-  try {
-    await store.invite(pl.id, email);
-    $('#invite-email').value = '';
-    toast(`เชิญ ${email} แล้ว`);
-  } catch (err) { toast(cloudError(err)); }
-});
-
-$('#btn-share-invite').addEventListener('click', async () => {
-  const pl = store.getPlan(membersPlanId);
-  if (!pl) return;
-  const url = location.origin + location.pathname;
-  const text = `มาเที่ยวด้วยกัน! ทริป “${pl.title}” (${fmtRange(pl.start, pl.end)}) เปิด Wanderpin แล้วเข้าสู่ระบบด้วยอีเมลที่ฉันเชิญไว้ จะเห็นแผนนี้ทันที`;
-  try {
-    if (navigator.share) { await navigator.share({ title: 'Wanderpin', text, url }); return; }
-    await navigator.clipboard.writeText(`${text}\n${url}`);
-    toast('คัดลอกข้อความเชิญแล้ว');
-  } catch (err) {
-    if (err?.name !== 'AbortError') toast('แชร์ไม่สำเร็จ');
-  }
+    if (addId) {
+      e.target.closest('button').disabled = true;
+      await store.addMember(pl.id, addId, social.friendProfile(addId));
+      toast(`เพิ่ม ${social.friendProfile(addId)?.name || 'เพื่อน'} เข้าแผนแล้ว`);
+      return;
+    }
+  } catch (err) { toast(cloudError(err)); renderMembers(); return; }
+  if (e.target.closest('[data-go-friends]')) { dlgMembers.close(); go('friends'); return; }
+  const user = e.target.closest('[data-user]')?.dataset.user;
+  if (user && !e.target.closest('button')) openUser(user, planMembers(pl).find((m) => m.uid === user));
 });
 
 $('#btn-leave-plan').addEventListener('click', () => {
@@ -814,6 +778,13 @@ function renderAll() {
   if (current === 'calendar') renderCalendar();
   if (dlgPlan.open) renderPicker();
   if (dlgMembers.open) renderMembers();
+  if (store.isCloud) {
+    social.updateStats({
+      places: store.places.length,
+      visited: store.places.filter((p) => p.status === 'visited').length,
+      plans: store.plans.length,
+    });
+  }
 }
 store.subscribe(renderAll);
 renderAll();
@@ -823,7 +794,7 @@ const hash = location.hash.slice(1);
 if (hash === 'add') { go('map'); openPlaceForm(null); } else go(hash || 'map');
 window.addEventListener('hashchange', () => go(location.hash.slice(1)));
 
-/* ---------- account (Google / Facebook) ---------- */
+/* ---------- account (Google) & profile ---------- */
 const dlgAccount = $('#dlg-account');
 let cloudApi = null;
 let cloudReady = null;
@@ -832,7 +803,6 @@ let accountMsg = '';
 let busy = false;
 
 const GOOGLE_SVG = '<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>';
-const FB_SVG = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.88v2.26h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z"/></svg>';
 
 function cloudError(err) {
   if (!err) return 'เกิดข้อผิดพลาด';
@@ -845,48 +815,52 @@ store.onError = (err) => toast(cloudError(err));
 
 function renderAccountButton() {
   const btn = $('#btn-account');
-  const u = store.user;
-  btn.classList.toggle('signed', Boolean(u));
-  btn.innerHTML = u
-    ? avatar(profileOf(u))
+  const me = store.user ? social.me : null;
+  btn.classList.toggle('signed', Boolean(store.user));
+  btn.innerHTML = store.user
+    ? avatar({ name: me?.name || store.user.displayName || '?', photo: me ? me.thumb : store.user.photoURL })
     : '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="4"/><path d="M4 20.5c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5z"/></svg>';
-  btn.title = u ? `เข้าระบบแล้ว: ${profileOf(u).name}` : 'เข้าสู่ระบบ';
+  btn.title = store.user ? `โปรไฟล์ของฉัน: ${me?.name || ''}` : 'เข้าสู่ระบบ';
+}
+
+function renderFriendsBadge() {
+  const n = social.active ? social.incomingCount : 0;
+  const b = $('#friends-badge');
+  b.hidden = !n;
+  b.textContent = n > 9 ? '9+' : n;
 }
 
 function renderAccount() {
   const body = $('#account-body');
-  const u = store.user;
+  $('#dlg-account h2').textContent = store.user ? 'โปรไฟล์ของฉัน' : 'บัญชีผู้ใช้';
   const msg = accountMsg ? `<p class="notice">${esc(accountMsg)}</p>` : '';
   if (!cloudConfigured) {
-    body.innerHTML = `${msg}<div class="notice">ระบบสมาชิกและเพื่อนร่วมทางต้องเชื่อม Firebase ก่อน
+    body.innerHTML = `${msg}<div class="notice">ระบบสมาชิกและเพื่อนต้องเชื่อม Firebase ก่อน
       ใส่ค่าโปรเจกต์ใน <code>js/firebase-config.js</code> ตามขั้นตอนใน README
       ระหว่างนี้ข้อมูลทั้งหมดเก็บอยู่ในเครื่องนี้และใช้งานได้ตามปกติ</div>`;
     return;
   }
-  if (u) {
-    const p = profileOf(u);
-    body.innerHTML = `${msg}<div class="profile">${avatar(p, 'lg')}<div><b>${esc(p.name)}</b><small>${esc(p.email || 'ไม่มีอีเมลในบัญชีนี้')}</small></div></div>
-      <p class="muted small">ข้อมูลซิงก์กับบัญชีนี้ ใช้ได้ทุกเครื่องที่เข้าระบบ${p.email ? '' : ' · บัญชีที่ไม่มีอีเมลจะรับคำเชิญจากเพื่อนไม่ได้'}</p>
-      <div class="menu-actions"><button class="btn danger" id="btn-signout">ออกจากระบบ</button></div>`;
-    $('#btn-signout').onclick = async () => { await cloudApi.signOut(); dlgAccount.close(); toast('ออกจากระบบแล้ว'); };
+  if (store.user) {
+    body.innerHTML = `${msg}<div id="profile-editor"></div>`;
+    renderProfileEditor($('#profile-editor'), {
+      onSignOut: async () => { await cloudApi.signOut(); dlgAccount.close(); toast('ออกจากระบบแล้ว'); },
+    });
     return;
   }
-  body.innerHTML = `${msg}<p class="muted">เข้าสู่ระบบเพื่อซิงก์ข้อมูลข้ามเครื่อง และชวนเพื่อนร่วมทางมาดูและแก้แผนเที่ยวด้วยกัน</p>
+  body.innerHTML = `${msg}<p class="muted">เข้าสู่ระบบเพื่อซิงก์ข้อมูลข้ามเครื่อง ตั้งชื่อและรูปของคุณ เพิ่มเพื่อน และชวนเพื่อนไปเที่ยวตามแผนเดียวกัน</p>
     <div class="signin">
       <button id="btn-google" ${busy ? 'disabled' : ''}>${GOOGLE_SVG}เข้าสู่ระบบด้วย Google</button>
-      <button id="btn-facebook" class="fb" ${busy ? 'disabled' : ''}>${FB_SVG}เข้าสู่ระบบด้วย Facebook</button>
     </div>
     <p class="muted small">ครั้งแรกที่เข้าระบบ สถานที่และแผนที่มีอยู่ในเครื่องนี้จะถูกอัปโหลดเข้าบัญชีให้</p>`;
-  $('#btn-google').onclick = () => signIn('google');
-  $('#btn-facebook').onclick = () => signIn('facebook');
+  $('#btn-google').onclick = () => signIn();
 }
 
-async function signIn(kind) {
+async function signIn() {
   busy = true; accountMsg = ''; renderAccount();
   try {
     const api = await cloudReady;
     if (!api) throw new Error('เชื่อมต่อระบบสมาชิกไม่ได้ (ต้องใช้อินเทอร์เน็ต)');
-    await api.signIn(kind);
+    await api.signIn();
     dlgAccount.close();
   } catch (err) {
     accountMsg = cloudError(err);
@@ -898,10 +872,25 @@ async function signIn(kind) {
 
 function openAccount(message = '') {
   accountMsg = message;
+  resetProfileDraft();
   renderAccount();
-  dlgAccount.showModal();
+  if (!dlgAccount.open) dlgAccount.showModal();
 }
 $('#btn-account').addEventListener('click', () => openAccount());
+
+social.onNewProfile = () => {
+  toast('ยินดีต้อนรับ! ตั้งชื่อและรูปของคุณได้เลย');
+  openAccount();
+};
+social.subscribe(() => {
+  renderAccountButton();
+  renderFriendsBadge();
+  if (current === 'friends') renderFriendsView();
+  if (dlgMembers.open) renderMembers();
+  if (store.isCloud) renderPlans();
+});
+bindFriendsView({ openAccount: () => openAccount(), openSignIn: () => openAccount() });
+bindUserDialog({ openAccount: () => openAccount() });
 
 async function onSignedIn(user) {
   const migratedKey = `wanderpin:uploaded:${user.uid}`;
@@ -918,14 +907,20 @@ async function onSignedIn(user) {
     try { localStorage.setItem(migratedKey, '1'); } catch {}
   }
   store.useCloud(cloudApi, user);
+  const h = social.start(cloudApi, user);
   renderAccountButton();
-  let first = true;
-  unwatch = cloudApi.watch(user, {
-    onPlaces: (places) => { store.setPlaces(places); if (first) { first = false; fitAll(); } },
-    onPlans: (plans) => store.setPlans(plans),
-    onJoined: (title) => toast(`👋 เข้าร่วมแผน “${title}” แล้ว`),
+  let firstPlaces = true;
+  let gotPlans = false;
+  let gotProfile = false;
+  const trySync = () => { if (gotPlans && gotProfile) { gotPlans = gotProfile = false; social.syncPlans(); } };
+  unwatch = cloudApi.watch(user.uid, {
+    ...h,
+    onProfile: (p, fromCache) => { h.onProfile(p, fromCache); if (p && !fromCache) { gotProfile = true; trySync(); } },
+    onPlaces: (places) => { store.setPlaces(places); if (firstPlaces) { firstPlaces = false; fitAll(); } },
+    onPlans: (plans) => { store.setPlans(plans); if (!gotPlans) { gotPlans = true; trySync(); } },
     onError: (err) => toast(cloudError(err)),
   });
+  if (current === 'friends') { renderFriendsView(); social.loadDirectory(); }
 }
 
 function startCloud() {
@@ -939,7 +934,7 @@ function startCloud() {
     api.onAuth((user) => {
       unwatch?.(); unwatch = null;
       if (user) onSignedIn(user);
-      else if (store.isCloud) { store.useLocal(); renderAccountButton(); }
+      else if (store.isCloud) { social.stop(); store.useLocal(); renderAccountButton(); }
     });
   });
 }

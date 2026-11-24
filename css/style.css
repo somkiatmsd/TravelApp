@@ -76,7 +76,7 @@ main {
   position: fixed; inset: auto 0 0 0;
   height: calc(var(--tabbar-h) + var(--safe-b));
   padding-bottom: var(--safe-b);
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--surface); border-top: 1px solid var(--line);
   z-index: 1000;
 }
@@ -337,7 +337,6 @@ legend small { font-size: .75rem; }
   font-weight: 600; border: 1px solid var(--line); background: var(--surface); color: var(--text);
 }
 .signin button svg { width: 20px; height: 20px; }
-.signin .fb { background: #1877f2; border-color: #1877f2; color: #fff; }
 .signin button:disabled { opacity: .6; }
 .profile { display: flex; align-items: center; gap: 12px; margin: 8px 0 14px; }
 .profile b { display: block; }
@@ -353,7 +352,65 @@ legend small { font-size: .75rem; }
 .role { font-size: .72rem; padding: 2px 8px; border-radius: 999px; background: var(--surface); color: var(--muted); white-space: nowrap; }
 .role.owner { background: var(--primary); color: var(--primary-ink); }
 .member-list .remove { border: 0; background: none; color: var(--danger); font-size: .85rem; padding: 6px; }
-.invite label { margin-bottom: 6px; }
-.invite-row { display: flex; gap: 8px; }
-.invite-row input { flex: 1; min-width: 0; }
-.invite { margin-bottom: 12px; }
+
+/* Friends tab & profiles */
+.tab { position: relative; }
+.tab-badge {
+  position: absolute; top: 6px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px; background: var(--danger); color: #fff; font-size: .68rem; font-style: normal;
+  font-weight: 700; display: grid; place-items: center; line-height: 1;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.center { text-align: center; }
+.friends { padding: 12px 12px 110px; display: grid; gap: 8px; align-content: start; }
+@media (min-width: 900px) { .friends { max-width: 760px; margin: 0 auto; } }
+.friends .search {
+  width: 100%; padding: 11px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+}
+.friends .search:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+.sec { font-size: .92rem; margin: 10px 2px 2px; display: flex; align-items: center; gap: 6px; }
+.count.hot { background: var(--danger); color: #fff; }
+.pad-s { margin: 2px 4px 6px; font-size: .88rem; }
+.me-card {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.me-card .who { flex: 1; min-width: 0; }
+.me-card .who b { display: block; font-size: 1.05rem; }
+.me-card .who small { color: var(--muted); font-size: .8rem; }
+.people { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.person {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+}
+.person .who { flex: 1; min-width: 0; }
+.person .who b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person .who small { display: block; color: var(--muted); font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person .acts { display: flex; gap: 6px; flex: none; }
+.person .acts .chip { padding: 5px 10px; font-size: .8rem; }
+.avatar.xl { width: 96px; height: 96px; font-size: 2.2rem; }
+.user-hero { display: grid; justify-items: center; gap: 6px; text-align: center; }
+.user-hero h2 { font-size: 1.3rem; overflow-wrap: anywhere; }
+.bio { white-space: pre-wrap; text-align: center; margin: 10px 0; line-height: 1.55; overflow-wrap: anywhere; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+.stats div { background: var(--surface-2); border-radius: 12px; padding: 10px 6px; text-align: center; }
+.stats b { display: block; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.stats small { color: var(--muted); font-size: .75rem; }
+.user-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 12px 0 4px; }
+.profile-form { display: grid; gap: 4px; }
+.profile-form label { margin-bottom: 0; }
+.profile-form input:not([type=checkbox]), .profile-form textarea { margin-bottom: 8px; }
+.photo-pick { display: grid; justify-items: center; gap: 10px; margin-bottom: 8px; }
+.photo-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.file-chip { display: inline-block !important; cursor: pointer; color: var(--text) !important; font-size: .85rem !important; margin: 0 !important; }
+.switch-row {
+  display: flex !important; gap: 12px; align-items: flex-start; padding: 10px 12px; margin: 4px 0 8px !important;
+  background: var(--surface-2); border-radius: 12px; cursor: pointer; color: var(--text) !important;
+}
+.switch-row input { width: 22px !important; height: 22px; margin-top: 2px; accent-color: var(--primary); flex: none; }
+.switch-row b { display: block; font-size: .95rem; }
+.switch-row small { color: var(--muted); font-size: .78rem; line-height: 1.45; }
+.member-list li { cursor: pointer; }
+.add-friends { margin: 4px 0 10px; }
+.add-friends h3 { font-size: .9rem; margin: 6px 2px 8px; }
+body[data-view="friends"] .fab { display: none; }

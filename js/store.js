@@ -103,7 +103,7 @@ export const store = {
     let item = { ...plan, id: uid(), createdAt: now, updatedAt: now };
     if (cloud) {
       const { user } = cloud;
-      item = { ...item, ownerId: user.uid, memberIds: [user.uid], members: {}, pendingEmails: [] };
+      item = { ...item, ownerId: user.uid, memberIds: [user.uid], members: {} };
       report(cloud.api.createPlan(user, item));
     }
     state = { ...state, plans: [...state.plans, item] };
@@ -121,13 +121,12 @@ export const store = {
   },
 
   /* companions (cloud only) */
-  invite(planId, email) { return cloud.api.invite(planId, email); },
-  cancelInvite(planId, email) { return cloud.api.cancelInvite(planId, email); },
+  addMember(planId, friendUid, profile) { return cloud.api.addMember(planId, friendUid, profile); },
   removeMember(planId, memberUid) { return cloud.api.removeMember(planId, memberUid); },
 
   /* backup */
   exportJSON() {
-    const plans = state.plans.map(({ memberIds, members, pendingEmails, ownerId, ...rest }) => rest);
+    const plans = state.plans.map(({ memberIds, members, pendingEmails, ownerId, lastAdded, ...rest }) => rest);
     return JSON.stringify({ app: 'wanderpin', version: 1, exportedAt: new Date().toISOString(), places: state.places, plans }, null, 2);
   },
 

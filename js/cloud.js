@@ -1,10 +1,13 @@
-// Firebase sign-in (Google / Facebook) and Firestore sync for places and shared plans.
+// Firebase: Google sign-in, Firestore sync of places and shared plans, profiles and friends.
 //
 // Firestore layout
-//   users/{uid}/places/{placeId}   private places of one user
-//   plans/{planId}                 a trip plan shared by its members
-//     ownerId, memberIds[], members{uid: {name, email, photo}}, pendingEmails[]
-//     title, start, end, color, note, placeIds[], stops[] (snapshot of places, so companions can see them)
+//   users/{uid}/places/{placeId}        private places of one user
+//   profiles/{uid}                      name, photo, thumb, bio, isPublic, stats
+//   profiles/{uid}/friends/{friendUid}  friendship (both sides get a doc)
+//   friendRequests/{from}_{to}          pending friend request
+//   plans/{planId}                      ownerId, memberIds[], members{uid: {name, thumb}}, lastAdded,
+//                                       title, start, end, color, note, placeIds[], stops[]
+// Who may read or write what is enforced by firestore.rules.
 import { firebaseConfig } from './firebase-config.js';
 
 const SDK = 'https://www.gstatic.com/firebasejs/10.12.2';
@@ -12,22 +15,20 @@ export const cloudConfigured = Boolean(firebaseConfig && firebaseConfig.apiKey &
 
 const PLAN_CONTENT = ['title', 'start', 'end', 'color', 'note', 'placeIds', 'stops'];
 
-export const lowerEmail = (e) => (e || '').trim().toLowerCase();
-
-export function profileOf(user) {
-  return {
-    name: user.displayName || (user.email ? user.email.split('@')[0] : 'ผู้ใช้'),
-    email: lowerEmail(user.email),
-    photo: user.photoURL || '',
-  };
+/** Profile defaults taken from the Google account. */
+export function profileFromUser(user) {
+  const name = (user.displayName || (user.email ? user.email.split('@')[0] : 'นักเดินทาง')).slice(0, 60);
+  return { name, nameLower: name.toLowerCase(), photo: user.photoURL || '', thumb: user.photoURL || '', bio: '', isPublic: false };
 }
+
+/** What a plan shows for one member. */
+export const memberSnapshot = (profile) => ({ name: profile?.name || 'สมาชิก', thumb: profile?.thumb || '' });
 
 export const AUTH_ERRORS = {
   'auth/popup-closed-by-user': 'ปิดหน้าต่างเข้าสู่ระบบก่อนเสร็จ',
   'auth/cancelled-popup-request': 'ยกเลิกการเข้าสู่ระบบ',
-  'auth/account-exists-with-different-credential': 'อีเมลนี้เคยเข้าระบบด้วยวิธีอื่น ลองเข้าด้วย Google หรือ Facebook อีกแบบ',
   'auth/unauthorized-domain': 'โดเมนนี้ยังไม่ได้รับอนุญาต เพิ่มโดเมนใน Firebase → Authentication → Settings → Authorized domains',
-  'auth/operation-not-allowed': 'ยังไม่ได้เปิดใช้วิธีเข้าสู่ระบบนี้ใน Firebase console',
+  'auth/operation-not-allowed': 'ยังไม่ได้เปิดใช้การเข้าสู่ระบบด้วย Google ใน Firebase console',
   'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่ได้',
 };
 
@@ -58,24 +59,32 @@ export async function initCloud() {
     globalThis.__wanderpinTest = { auth, authMod };
   }
 
-  const { doc, collection, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, writeBatch, arrayUnion, arrayRemove, deleteField } = fs;
+  const {
+    doc, collection, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, query, where, limit,
+    writeBatch, arrayUnion, arrayRemove, deleteField,
+  } = fs;
   const now = () => new Date().toISOString();
   const placeRef = (uid, id) => doc(db, 'users', uid, 'places', id);
   const planRef = (id) => doc(db, 'plans', id);
+  const profileRef = (uid) => doc(db, 'profiles', uid);
+  const friendRef = (uid, fid) => doc(db, 'profiles', uid, 'friends', fid);
+  const requestRef = (from, to) => doc(db, 'friendRequests', `${from}_${to}`);
   const clean = (o) => JSON.parse(JSON.stringify(o)); // drop undefined / functions
+  const list = (s) => s.docs.map((d) => ({ ...d.data(), id: d.id }));
 
-  // Surface errors from a redirect sign-in (used when popups are unavailable).
+  let me = null; // { uid, ...profile } of the signed-in user, kept current by the app
+
   const redirectError = authMod.getRedirectResult(auth).then(() => null).catch((e) => e);
 
   return {
     redirectError,
     onAuth: (cb) => authMod.onAuthStateChanged(auth, cb),
     get user() { return auth.currentUser; },
+    setMe(profile) { me = profile; },
 
-    async signIn(kind) {
-      const provider = kind === 'facebook' ? new authMod.FacebookAuthProvider() : new authMod.GoogleAuthProvider();
-      provider.addScope('email');
-      if (kind === 'google') provider.setCustomParameters({ prompt: 'select_account' });
+    async signIn() {
+      const provider = new authMod.GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
       try {
         return await authMod.signInWithPopup(auth, provider);
       } catch (e) {
@@ -87,27 +96,66 @@ export async function initCloud() {
     },
     signOut: () => authMod.signOut(auth),
 
-    /** Live data for the signed-in user. Also auto-joins plans this user was invited to by email. */
-    watch(user, { onPlaces, onPlans, onError, onJoined }) {
-      const me = profileOf(user);
-      const unsubs = [];
-      unsubs.push(onSnapshot(collection(db, 'users', user.uid, 'places'),
-        (s) => onPlaces(s.docs.map((d) => ({ ...d.data(), id: d.id }))), onError));
-      unsubs.push(onSnapshot(query(collection(db, 'plans'), where('memberIds', 'array-contains', user.uid)),
-        (s) => onPlans(s.docs.map((d) => ({ ...d.data(), id: d.id }))), onError));
-      if (me.email) {
-        unsubs.push(onSnapshot(query(collection(db, 'plans'), where('pendingEmails', 'array-contains', me.email)),
-          (s) => s.docs.forEach((d) => {
-            updateDoc(d.ref, {
-              memberIds: arrayUnion(user.uid),
-              [`members.${user.uid}`]: me,
-              pendingEmails: arrayRemove(me.email),
-            }).then(() => onJoined?.(d.data().title)).catch((e) => console.warn('join failed', e));
-          }), onError));
-      }
-      return () => unsubs.forEach((u) => u());
+    /* ----- live data ----- */
+    watch(uid, h) {
+      const subs = [
+        onSnapshot(collection(db, 'users', uid, 'places'), (s) => h.onPlaces(list(s)), h.onError),
+        onSnapshot(query(collection(db, 'plans'), where('memberIds', 'array-contains', uid)), (s) => h.onPlans(list(s)), h.onError),
+        onSnapshot(profileRef(uid), { includeMetadataChanges: true }, (s) => h.onProfile(s.exists() ? { ...s.data(), uid } : null, s.metadata.fromCache), h.onError),
+        onSnapshot(collection(db, 'profiles', uid, 'friends'), (s) => h.onFriendIds(s.docs.map((d) => d.id)), h.onError),
+        onSnapshot(query(collection(db, 'friendRequests'), where('to', '==', uid)), (s) => h.onIncoming(list(s)), h.onError),
+        onSnapshot(query(collection(db, 'friendRequests'), where('from', '==', uid)), (s) => h.onOutgoing(list(s)), h.onError),
+      ];
+      return () => subs.forEach((u) => u());
+    },
+    /** Live profile of one user (friends, or anyone public). Calls back with null if hidden. */
+    watchProfile(uid, cb) {
+      return onSnapshot(profileRef(uid), (s) => cb(s.exists() ? { ...s.data(), uid } : null), () => cb(null));
+    },
+    async getProfile(uid) {
+      try { const s = await getDoc(profileRef(uid)); return s.exists() ? { ...s.data(), uid } : null; } catch { return null; }
+    },
+    async publicProfiles() {
+      const s = await getDocs(query(collection(db, 'profiles'), where('isPublic', '==', true), limit(300)));
+      return s.docs.map((d) => ({ ...d.data(), uid: d.id }));
     },
 
+    /* ----- profile ----- */
+    saveProfile(uid, profile) {
+      const data = { ...profile, nameLower: profile.name.toLowerCase(), updatedAt: now() };
+      ['uid', 'hidden'].forEach((k) => delete data[k]);
+      return setDoc(profileRef(uid), clean(data), { merge: true });
+    },
+    /** Refresh my name/photo in every plan I'm in. */
+    async syncMemberSnapshot(uid, plans, profile) {
+      const snap = memberSnapshot(profile);
+      await Promise.all(plans
+        .filter((pl) => JSON.stringify(pl.members?.[uid] || {}) !== JSON.stringify(snap))
+        .map((pl) => updateDoc(planRef(pl.id), { [`members.${uid}`]: snap })));
+    },
+
+    /* ----- friends ----- */
+    sendRequest(uid, to) {
+      return setDoc(requestRef(uid, to), { from: uid, to, fromName: me?.name || 'ผู้ใช้', fromThumb: me?.thumb || '', createdAt: now() });
+    },
+    cancelRequest: (from, to) => deleteDoc(requestRef(from, to)),
+    async acceptRequest(uid, from, alsoSentByMe) {
+      const b = writeBatch(db);
+      const since = now();
+      b.set(friendRef(uid, from), { since });
+      b.set(friendRef(from, uid), { since });
+      b.delete(requestRef(from, uid));
+      if (alsoSentByMe) b.delete(requestRef(uid, from));
+      await b.commit();
+    },
+    async unfriend(uid, fid) {
+      const b = writeBatch(db);
+      b.delete(friendRef(uid, fid));
+      b.delete(friendRef(fid, uid));
+      await b.commit();
+    },
+
+    /* ----- places & plans ----- */
     savePlace: (uid, place) => setDoc(placeRef(uid, place.id), clean(place)),
     deletePlace: (uid, id) => deleteDoc(placeRef(uid, id)),
 
@@ -116,8 +164,7 @@ export async function initCloud() {
         ...plan,
         ownerId: user.uid,
         memberIds: [user.uid],
-        members: { [user.uid]: profileOf(user) },
-        pendingEmails: [],
+        members: { [user.uid]: memberSnapshot(me) },
       }));
     },
     updatePlanContent(plan) {
@@ -126,9 +173,8 @@ export async function initCloud() {
       return updateDoc(planRef(plan.id), clean(data));
     },
     deletePlan: (id) => deleteDoc(planRef(id)),
-
-    invite: (planId, email) => updateDoc(planRef(planId), { pendingEmails: arrayUnion(lowerEmail(email)), updatedAt: now() }),
-    cancelInvite: (planId, email) => updateDoc(planRef(planId), { pendingEmails: arrayRemove(lowerEmail(email)), updatedAt: now() }),
+    addMember: (planId, uid, profile) =>
+      updateDoc(planRef(planId), { memberIds: arrayUnion(uid), lastAdded: uid, [`members.${uid}`]: memberSnapshot(profile), updatedAt: now() }),
     removeMember: (planId, uid) => updateDoc(planRef(planId), { memberIds: arrayRemove(uid), [`members.${uid}`]: deleteField(), updatedAt: now() }),
     leavePlan: (planId, uid) => updateDoc(planRef(planId), { memberIds: arrayRemove(uid), [`members.${uid}`]: deleteField() }),
 
@@ -137,7 +183,7 @@ export async function initCloud() {
       const ops = [
         ...places.map((p) => (b) => b.set(placeRef(user.uid, p.id), clean(p))),
         ...plans.map((pl) => (b) => b.set(planRef(pl.id), clean({
-          ...pl, ownerId: user.uid, memberIds: [user.uid], members: { [user.uid]: profileOf(user) }, pendingEmails: [],
+          ...pl, ownerId: user.uid, memberIds: [user.uid], members: { [user.uid]: memberSnapshot(me) },
         }))),
       ];
       for (let i = 0; i < ops.length; i += 400) {
