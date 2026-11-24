@@ -45,9 +45,10 @@ service cloud.firestore {
       allow delete: if signedIn() && me() == uid;
 
       // profiles/{uid}/friends/{fid}: fid is a friend of uid.
+      // Readable by uid and by uid's friends (to see friends of friends; their profiles keep their own rules).
       // Only the person who received a request can create the two friendship docs (when accepting).
       match /friends/{fid} {
-        allow read: if signedIn() && me() == uid;
+        allow read: if signedIn() && (me() == uid || isFriend(uid, me()));
         allow create: if signedIn()
           && request.resource.data.keys().hasOnly(['since'])
           && (

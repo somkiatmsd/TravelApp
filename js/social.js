@@ -13,6 +13,8 @@ const state = {
   outgoing: [],
   directory: null, // public profiles, loaded on demand
   directoryAt: 0,
+  fof: null, // public friends of my friends: [{...profile, uid, via: [friendUid]}]
+  fofAt: 0,
   query: '',
 };
 const friendSubs = new Map();
@@ -33,6 +35,7 @@ export const social = {
   get me() { return state.me; },
   get uid() { return state.uid; },
   get incomingCount() { return state.incoming.length; },
+  get fofReady() { return state.fof !== null; },
   /** Friends with loaded profiles, sorted by name. */
   get friends() {
     return state.friendIds.map((id) => ({ uid: id, ...(state.friends.get(id) || { name: '…' }) }))
@@ -72,7 +75,7 @@ export const social = {
         api.setMe(state.me);
         emit();
       },
-      onFriendIds: (ids) => { state.friendIds = ids; syncFriendSubs(); emit(); },
+      onFriendIds: (ids) => { state.friendIds = ids; state.fof = null; syncFriendSubs(); emit(); },
       onIncoming: (list) => { state.incoming = list; emit(); },
       onOutgoing: (list) => { state.outgoing = list; emit(); },
     };
@@ -80,7 +83,7 @@ export const social = {
   stop() {
     friendSubs.forEach((u) => u());
     friendSubs.clear();
-    Object.assign(state, { api: null, uid: null, me: null, friendIds: [], incoming: [], outgoing: [], directory: null, directoryAt: 0 });
+    Object.assign(state, { api: null, uid: null, me: null, friendIds: [], incoming: [], outgoing: [], directory: null, directoryAt: 0, fof: null, fofAt: 0 });
     state.friends = new Map();
     emit();
   },
@@ -123,6 +126,36 @@ export const social = {
   async unfriend(uid) {
     try { await state.api.unfriend(state.uid, uid); toast('เลิกเป็นเพื่อนแล้ว'); } catch (e) { toast(errMsg(e)); }
   },
+  /** Public profiles of my friends' friends (not me, not already my friends). */
+  async loadFriendsOfFriends(force = false) {
+    if (!state.api || fofLoading) return;
+    if (!force && state.fof && Date.now() - state.fofAt < 60000) return;
+    fofLoading = true;
+    try {
+      const via = new Map();
+      await Promise.all(state.friendIds.map(async (fid) => {
+        (await state.api.friendIdsOf(fid).catch(() => [])).forEach((id) => {
+          if (id === state.uid || state.friendIds.includes(id)) return;
+          if (!via.has(id)) via.set(id, []);
+          via.get(id).push(fid);
+        });
+      }));
+      const found = await Promise.all([...via.keys()].slice(0, 100).map((id) => publicProfile(id)));
+      state.fof = found.filter(Boolean)
+        .map((p) => ({ ...p, via: via.get(p.uid) }))
+        .sort((a, b) => b.via.length - a.via.length || (a.name || '').localeCompare(b.name || '', 'th'));
+      state.fofAt = Date.now();
+    } finally {
+      fofLoading = false;
+    }
+    emit();
+  },
+  /** Public friends of one of my friends (for their profile page). */
+  async publicFriendsOf(uid) {
+    const ids = (await state.api.friendIdsOf(uid).catch(() => [])).filter((id) => id !== state.uid);
+    const list = await Promise.all(ids.slice(0, 100).map((id) => publicProfile(id)));
+    return list.filter(Boolean).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'));
+  },
   async loadDirectory(force = false) {
     if (!state.api) return;
     if (!force && state.directory && Date.now() - state.directoryAt < 60000) return;
@@ -136,6 +169,15 @@ export const social = {
     emit();
   },
 };
+
+let fofLoading = false;
+/** A user's profile if it is public (null for private or hidden ones). */
+async function publicProfile(uid) {
+  const known = (state.directory || []).find((p) => p.uid === uid);
+  if (known) return known;
+  const p = await state.api.getProfile(uid);
+  return p && p.isPublic ? p : null;
+}
 
 function syncFriendSubs() {
   const want = new Set(state.friendIds);
@@ -201,8 +243,14 @@ export function renderFriendsView() {
   const incoming = state.incoming.filter(match);
   const friends = social.friends.filter(match);
   const outgoing = state.outgoing.filter((r) => match(state.friends.get(r.to) || findDir(r.to) || {}));
+  const fof = (state.fof || []).filter(match);
+  const fofIds = new Set(fof.map((p) => p.uid));
+  const viaText = (p) => {
+    const names = p.via.map((id) => state.friends.get(id)?.name).filter(Boolean);
+    return names.length ? `เพื่อนของ ${esc(names.slice(0, 2).join(', '))}${names.length > 2 ? ` และอีก ${names.length - 2} คน` : ''}` : 'เพื่อนของเพื่อน';
+  };
   const dir = (state.directory || [])
-    .filter((p) => p.uid !== state.uid && !state.friendIds.includes(p.uid) && match(p))
+    .filter((p) => p.uid !== state.uid && !state.friendIds.includes(p.uid) && !fofIds.has(p.uid) && match(p))
     .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'));
 
   root.innerHTML = `
@@ -223,6 +271,11 @@ export function renderFriendsView() {
 
     ${outgoing.length ? `<h3 class="sec">คำขอที่ส่งไป <span class="count">${outgoing.length}</span></h3>
       <ul class="people">${outgoing.map((r) => { const p = findDir(r.to) || {}; return personRow({ uid: r.to, name: p.name || 'ผู้ใช้', thumb: p.thumb }, 'รอการตอบรับ'); }).join('')}</ul>` : ''}
+
+    ${state.friendIds.length ? `<h3 class="sec">เพื่อนของเพื่อน ${state.fof ? `<span class="count">${fof.length}</span>` : ''}</h3>
+      ${state.fof === null ? '<p class="muted pad-s">กำลังโหลด…</p>'
+        : fof.length ? `<ul class="people">${fof.map((p) => personRow(p, viaText(p))).join('')}</ul>`
+        : `<p class="muted pad-s">${q ? 'ไม่พบชื่อนี้ในเพื่อนของเพื่อน' : 'ยังไม่มีเพื่อนของเพื่อนที่เป็นโปรไฟล์สาธารณะ'}</p>`}` : ''}
 
     <div class="row-between"><h3 class="sec">นักเดินทางสาธารณะ</h3><button class="chip" data-refresh>รีเฟรช</button></div>
     ${state.directory === null ? '<p class="muted pad-s">กำลังโหลด…</p>'
@@ -246,7 +299,12 @@ export function bindFriendsView({ openAccount, openSignIn }) {
   $('#friends-body').addEventListener('click', (e) => {
     if (e.target.closest('[data-signin]')) return openSignIn();
     if (e.target.closest('[data-edit-profile]')) return openAccount();
-    if (e.target.closest('[data-refresh]')) { state.directory = null; renderFriendsView(); return social.loadDirectory(true); }
+    if (e.target.closest('[data-refresh]')) {
+      state.directory = null;
+      state.fof = null;
+      renderFriendsView();
+      return social.loadDirectory(true).then(() => social.loadFriendsOfFriends(true));
+    }
     const btn = e.target.closest('[data-act]');
     if (btn) {
       e.stopPropagation();
@@ -260,6 +318,7 @@ export function bindFriendsView({ openAccount, openSignIn }) {
 
 /* ----- Public profile page ----- */
 let viewing = null;
+let userFriends; // undefined = not shown / loading, [] = none
 export async function openUser(uid, fallback = null) {
   const dlg = $('#dlg-user');
   viewing = uid;
@@ -268,11 +327,17 @@ export async function openUser(uid, fallback = null) {
     const req = state.incoming.find((r) => r.from === uid);
     p = fallback || (req ? { name: req.fromName, thumb: req.fromThumb, hidden: true } : null);
   }
+  userFriends = undefined;
   renderUser(uid, p);
   if (!dlg.open) dlg.showModal();
   // Fetch the latest version (also tells us if the profile is hidden from us).
   const fresh = state.api ? await state.api.getProfile(uid) : null;
   if (viewing === uid && dlg.open) renderUser(uid, fresh || (p ? { ...p, hidden: true } : null));
+  // A friend's page lists their public friends.
+  if (state.api && social.isFriend(uid)) {
+    const list = await social.publicFriendsOf(uid);
+    if (viewing === uid && dlg.open) { userFriends = list; renderUser(uid, fresh || p); }
+  }
 }
 
 function renderUser(uid, p) {
@@ -301,6 +366,10 @@ function renderUser(uid, p) {
     ${sharedPlans.length ? `<p class="muted small center">เที่ยวด้วยกันใน ${sharedPlans.map((pl) => `“${esc(pl.title)}”`).join(', ')}</p>` : ''}
     <div class="user-actions">${rel === 'me' ? '<button class="btn primary" data-edit-profile>แก้ไขโปรไฟล์</button>' : actionButtons(uid)}</div>
     ${rel === 'none' && p.hidden ? '<p class="muted small center">ส่งคำขอได้เฉพาะโปรไฟล์สาธารณะ</p>' : ''}
+    ${rel === 'friend' ? `<h3 class="sec">เพื่อนของ ${esc(p.name || '')}${userFriends ? ` <span class="count">${userFriends.length}</span>` : ''}</h3>
+      ${userFriends === undefined ? '<p class="muted pad-s">กำลังโหลด…</p>'
+        : userFriends.length ? `<ul class="people">${userFriends.map((f) => personRow(f, social.isFriend(f.uid) ? 'เพื่อนของคุณด้วย' : (f.bio || '').slice(0, 50) && esc(f.bio.slice(0, 50)))).join('')}</ul>`
+        : '<p class="muted pad-s">ยังไม่มีเพื่อนที่เป็นโปรไฟล์สาธารณะ</p>'}` : ''}
   `;
 }
 
@@ -309,7 +378,12 @@ export function bindUserDialog({ openAccount }) {
   dlg.addEventListener('click', (e) => {
     if (e.target.closest('[data-edit-profile]')) { dlg.close(); return openAccount(); }
     const btn = e.target.closest('[data-act]');
-    if (btn) runAction(btn.dataset.act, btn.dataset.uid, $('#user-body h2')?.textContent);
+    if (btn) {
+      const row = btn.closest('[data-open]');
+      return runAction(btn.dataset.act, btn.dataset.uid, row ? row.querySelector('b')?.textContent : $('#user-body h2')?.textContent);
+    }
+    const row = e.target.closest('[data-open]'); // a friend of this friend
+    if (row) openUser(row.dataset.open);
   });
   social.subscribe(() => {
     if (dlg.open && viewing) {

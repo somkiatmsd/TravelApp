@@ -115,6 +115,11 @@ export async function initCloud() {
     async getProfile(uid) {
       try { const s = await getDoc(profileRef(uid)); return s.exists() ? { ...s.data(), uid } : null; } catch { return null; }
     },
+    /** Friend IDs of one of my friends (allowed by the rules only for friends). */
+    async friendIdsOf(uid) {
+      const s = await getDocs(collection(db, 'profiles', uid, 'friends'));
+      return s.docs.map((d) => d.id);
+    },
     async publicProfiles() {
       const s = await getDocs(query(collection(db, 'profiles'), where('isPublic', '==', true), limit(300)));
       return s.docs.map((d) => ({ ...d.data(), uid: d.id }));

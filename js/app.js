@@ -38,7 +38,7 @@ function go(view) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.go === view));
   if (view === 'map') setTimeout(() => map.invalidateSize(), 0);
   if (view === 'calendar') renderCalendar();
-  if (view === 'friends') { renderFriendsView(); social.loadDirectory(); }
+  if (view === 'friends') { renderFriendsView(); social.loadDirectory().then(() => social.loadFriendsOfFriends()); }
   if (view === 'plans' && store.isCloud) markPlansSeen();
   if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
 }
@@ -1070,7 +1070,7 @@ social.onNewProfile = () => {
 social.subscribe(() => {
   renderAccountButton();
   renderBadges();
-  if (current === 'friends') renderFriendsView();
+  if (current === 'friends') { renderFriendsView(); if (!social.fofReady) social.loadFriendsOfFriends(); }
   if (dlgMembers.open) renderMembers();
   if (store.isCloud) renderPlans();
 });
