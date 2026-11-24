@@ -418,3 +418,5 @@ body[data-view="friends"] .fab { display: none; }
 .search-results li.credit:hover { background: none; }
 .plan-card .tag.fresh { background: var(--danger); color: #fff; }
 .plan-card.is-fresh { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent); }
+.chip.danger-chip { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.chip.done-chip { color: var(--visited); border-color: color-mix(in srgb, var(--visited) 45%, transparent); background: color-mix(in srgb, var(--visited) 10%, var(--surface)); }

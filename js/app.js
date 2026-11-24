@@ -662,10 +662,14 @@ function renderPlans() {
         ${pl.note ? `<p class="note">${esc(pl.note)}</p>` : ''}
         ${membersRow(pl)}
         <div class="row">
+          ${places.length ? (planDoneForMe(pl)
+            ? '<span class="chip done-chip">✓ ไปครบแล้ว</span>'
+            : '<button class="chip primary" data-a="visited">✓ ไปแล้ว</button>') : ''}
           <button class="chip" data-a="map">ดูเส้นทาง</button>
           <button class="chip" data-a="cal">ดูในปฏิทิน</button>
           <button class="chip" data-a="members">👥 เพื่อนร่วมทาง</button>
           <button class="chip" data-a="edit">แก้ไข</button>
+          ${store.isCloud && !store.isOwner(pl) ? '<button class="chip danger-chip" data-a="leave">ออกจากแผน</button>' : ''}
         </div>
       </div></li>`;
   }).join('');
@@ -678,12 +682,53 @@ $('#plan-list').addEventListener('click', (e) => {
   if (a === 'map') showPlanOnMap(pl.id);
   if (a === 'edit') openPlanForm(pl.id);
   if (a === 'members') openMembers(pl.id);
+  if (a === 'visited') markPlanVisited(pl);
+  if (a === 'leave' && confirm(`ออกจากแผน “${pl.title}”? แผนนี้จะหายจากรายการของคุณ`)) {
+    store.deletePlan(pl.id);
+    toast('ออกจากแผนแล้ว');
+  }
   if (a === 'cal') {
     const d = parseYmd(pl.start);
     Object.assign(calState, { y: d.getFullYear(), m: d.getMonth(), sel: pl.start });
     go('calendar');
   }
 });
+
+/* ---------- "we went": mark a whole plan as visited ---------- */
+/** My own copy of a plan stop: the place itself, or one I saved with the same Google place / name and spot. */
+function myPlaceFor(stop) {
+  const own = store.getPlace(stop.id);
+  if (own) return own;
+  return store.places.find((p) =>
+    (stop.gmapsId && p.gmapsId === stop.gmapsId)
+    || (p.name === stop.name && typeof p.lat === 'number' && typeof stop.lat === 'number'
+      && Math.abs(p.lat - stop.lat) < 0.0005 && Math.abs(p.lng - stop.lng) < 0.0005));
+}
+const planDoneForMe = (pl) => planPlaces(pl).every((s) => myPlaceFor(s)?.status === 'visited');
+
+function markPlanVisited(pl) {
+  const today = todayStr();
+  const when = today > pl.end ? pl.end : today; // trip already over → its last day
+  let changed = 0;
+  planPlaces(pl).forEach((stop) => {
+    const mine = myPlaceFor(stop);
+    if (mine?.status === 'visited') return;
+    if (mine) store.savePlace({ ...mine, status: 'visited', visitedAt: when });
+    else {
+      // A companion's place: save it to my own list as visited, so it counts for me too.
+      const { id, ...rest } = stop;
+      store.savePlace({ ...rest, priority: 2, note: `จากแผน “${pl.title}”`, status: 'visited', visitedAt: when });
+    }
+    changed++;
+  });
+  // Refresh the plan's snapshot of my own places so companions see the progress.
+  const stops = pl.placeIds.map((id) => {
+    const own = store.getPlace(id);
+    return own ? stopOf(own) : (pl.stops || []).find((s) => s.id === id);
+  }).filter(Boolean);
+  if (store.isCloud && stops.some((s) => store.getPlace(s.id))) store.savePlan({ id: pl.id, stops });
+  toast(changed ? `🎉 บันทึกว่าไป “${pl.title}” แล้ว (${changed} ที่)` : 'ไปครบทุกที่ในแผนนี้แล้ว');
+}
 
 /* ---------- companions (friends only) ---------- */
 const dlgMembers = $('#dlg-members');
