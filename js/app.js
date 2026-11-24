@@ -31,6 +31,7 @@ const stopOf = (p) => ({ id: p.id, name: p.name, category: p.category, status: p
 let current = 'map';
 function go(view) {
   if (!['map', 'list', 'calendar', 'plans', 'friends'].includes(view)) view = 'map';
+  if (current === 'plans' && view !== 'plans' && freshPlans.size) { freshPlans.clear(); renderPlans(); }
   current = view;
   document.body.dataset.view = view;
   $$('.view').forEach((v) => (v.hidden = v.dataset.view !== view));
@@ -38,6 +39,7 @@ function go(view) {
   if (view === 'map') setTimeout(() => map.invalidateSize(), 0);
   if (view === 'calendar') renderCalendar();
   if (view === 'friends') { renderFriendsView(); social.loadDirectory(); }
+  if (view === 'plans' && store.isCloud) markPlansSeen();
   if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
 }
 $$('.tab').forEach((t) => t.addEventListener('click', () => go(t.dataset.go)));
@@ -593,6 +595,46 @@ function membersRow(pl) {
   return `<div class="avatars" data-a="members" role="button" tabindex="0">${faces}<span class="label">${label}</span></div>`;
 }
 
+/* ---------- "you were added to a plan" notifications ----------
+   Plans someone else owns that this user hasn't opened yet (remembered per device). */
+let seenPlans = null; // Set of plan ids already seen; null until the server has answered
+const freshPlans = new Set(); // tagged "ใหม่" while the Plans tab is open
+const announced = new Set();
+const seenKey = () => `wanderpin:seenPlans:${social.uid}`;
+const invitedPlans = () => (store.isCloud ? store.plans.filter((pl) => !store.isOwner(pl)) : []);
+const unseenPlans = () => (seenPlans ? invitedPlans().filter((pl) => !seenPlans.has(pl.id)) : []);
+const ownerName = (pl) => pl.members?.[pl.ownerId]?.name || 'เพื่อน';
+function saveSeen() { try { localStorage.setItem(seenKey(), JSON.stringify([...seenPlans])); } catch {} }
+
+function onPlansArrived(fromCache) {
+  if (!store.isCloud || !social.uid) return;
+  if (!seenPlans) {
+    if (fromCache) return; // wait for the server before deciding what is new
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(seenKey()) || 'null'); } catch {}
+    if (saved) seenPlans = new Set(saved);
+    else { seenPlans = new Set(invitedPlans().map((pl) => pl.id)); saveSeen(); } // first time on this device
+  }
+  const news = unseenPlans().filter((pl) => !announced.has(pl.id));
+  news.forEach((pl) => announced.add(pl.id));
+  if (news.length === 1) toast(`👋 ${ownerName(news[0])} ชวนคุณเข้าแผน “${news[0].title}”`);
+  else if (news.length > 1) toast(`👋 คุณถูกชวนเข้าแผนใหม่ ${news.length} แผน`);
+  if (current === 'plans') markPlansSeen();
+  else renderBadges();
+}
+
+function markPlansSeen() {
+  const unseen = unseenPlans();
+  if (unseen.length) {
+    unseen.forEach((pl) => { seenPlans.add(pl.id); freshPlans.add(pl.id); });
+    saveSeen();
+    renderPlans();
+  }
+  renderBadges();
+}
+
+function resetPlanNotices() { seenPlans = null; freshPlans.clear(); announced.clear(); }
+
 function renderPlans() {
   const ul = $('#plan-list');
   if (!store.plans.length) {
@@ -608,11 +650,11 @@ function renderPlans() {
     const done = places.filter((p) => p.status === 'visited').length;
     const nights = Math.round((parseYmd(pl.end) - parseYmd(pl.start)) / 86400000);
     const owner = store.isCloud && !store.isOwner(pl) ? pl.members?.[pl.ownerId] : null;
-    return `<li class="card plan-card" data-id="${pl.id}">
+    return `<li class="card plan-card ${freshPlans.has(pl.id) ? 'is-fresh' : ''}" data-id="${pl.id}">
       <div class="plan-bar" style="background:${esc(pl.color || '#0d9488')}"></div>
       <div class="plan-body">
-        <div class="title">${esc(pl.title)}<span class="tag ${st.cls}">${st.label}</span></div>
-        ${owner ? `<div class="shared-by">แชร์โดย ${esc(owner.name || owner.email)}</div>` : ''}
+        <div class="title">${esc(pl.title)}<span class="tag ${st.cls}">${st.label}</span>${freshPlans.has(pl.id) ? '<span class="tag fresh">ใหม่</span>' : ''}</div>
+        ${owner ? `<div class="shared-by">${freshPlans.has(pl.id) ? '👋 ชวนโดย' : 'แชร์โดย'} ${esc(owner.name || owner.email)}</div>` : ''}
         <div class="plan-dates">📅 ${fmtRange(pl.start, pl.end)} · ${nights + 1} วัน${nights ? ` ${nights} คืน` : ''}</div>
         ${places.length ? `<ol>${places.map((p) => `<li class="${p.status === 'visited' ? 'done' : ''}">${icon(p.category)} ${esc(p.name)}</li>`).join('')}</ol>
           <div class="progress" title="ไปแล้ว ${done}/${places.length}"><i style="width:${(done / places.length) * 100}%"></i></div>
@@ -824,12 +866,18 @@ function renderAccountButton() {
   btn.title = store.user ? `โปรไฟล์ของฉัน: ${me?.name || ''}` : 'เข้าสู่ระบบ';
 }
 
-function renderFriendsBadge() {
-  const n = social.active ? social.incomingCount : 0;
-  const b = $('#friends-badge');
+function setTabBadge(id, n) {
+  const b = $(id);
   b.hidden = !n;
   b.textContent = n > 9 ? '9+' : n;
-  setIconBadge(n);
+}
+/** Red numbers: Friends tab = friend requests, Plans tab = new plans you were added to, app icon = both. */
+function renderBadges() {
+  const requests = social.active ? social.incomingCount : 0;
+  const plans = social.active ? unseenPlans().length : 0;
+  setTabBadge('#friends-badge', requests);
+  setTabBadge('#plans-badge', plans);
+  setIconBadge(requests + plans);
 }
 
 /* Red number on the home-screen icon (App Badging API).
@@ -847,7 +895,7 @@ function renderBadgeSetting() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   btn.hidden = !(canBadge && perm === 'default');
   hint.hidden = false;
-  if (canBadge && perm === 'granted') hint.textContent = '🔴 เปิดตัวเลขแจ้งเตือนบนไอคอนแล้ว: แสดงจำนวนคำขอเป็นเพื่อนที่รออยู่';
+  if (canBadge && perm === 'granted') hint.textContent = '🔴 เปิดตัวเลขแจ้งเตือนบนไอคอนแล้ว: แสดงจำนวนคำขอเป็นเพื่อนและแผนใหม่ที่คุณถูกชวน';
   else if (canBadge && perm === 'denied') hint.textContent = 'ปิดการแจ้งเตือนไว้ เปิดได้ที่ การตั้งค่า → การแจ้งเตือน → Wanderpin';
   else if (isIOS && !isStandalone()) hint.textContent = 'ติดตั้งแอปบนหน้าจอโฮมก่อน (ปุ่มแชร์ → เพิ่มไปยังหน้าจอโฮม) จึงจะเปิดตัวเลขแจ้งเตือนบนไอคอนได้';
   else if (!canBadge) hint.textContent = 'เครื่องหรือเบราว์เซอร์นี้แสดงตัวเลขบนไอคอนแอปไม่ได้';
@@ -856,7 +904,7 @@ function renderBadgeSetting() {
 $('#btn-badge').addEventListener('click', async () => {
   try {
     const perm = await Notification.requestPermission();
-    if (perm === 'granted') { toast('เปิดตัวเลขแจ้งเตือนบนไอคอนแล้ว'); renderFriendsBadge(); }
+    if (perm === 'granted') { toast('เปิดตัวเลขแจ้งเตือนบนไอคอนแล้ว'); renderBadges(); }
     else toast('ไม่ได้อนุญาตการแจ้งเตือน');
   } catch { toast('เปิดการแจ้งเตือนไม่ได้'); }
   renderBadgeSetting();
@@ -916,7 +964,7 @@ social.onNewProfile = () => {
 };
 social.subscribe(() => {
   renderAccountButton();
-  renderFriendsBadge();
+  renderBadges();
   if (current === 'friends') renderFriendsView();
   if (dlgMembers.open) renderMembers();
   if (store.isCloud) renderPlans();
@@ -949,7 +997,11 @@ async function onSignedIn(user) {
     ...h,
     onProfile: (p, fromCache) => { h.onProfile(p, fromCache); if (p && !fromCache) { gotProfile = true; trySync(); } },
     onPlaces: (places) => { store.setPlaces(places); if (firstPlaces) { firstPlaces = false; fitAll(); } },
-    onPlans: (plans) => { store.setPlans(plans); if (!gotPlans) { gotPlans = true; trySync(); } },
+    onPlans: (plans, fromCache) => {
+      store.setPlans(plans);
+      onPlansArrived(fromCache);
+      if (!gotPlans && !fromCache) { gotPlans = true; trySync(); }
+    },
     onError: (err) => toast(cloudError(err)),
   });
   if (current === 'friends') { renderFriendsView(); social.loadDirectory(); }
@@ -966,7 +1018,7 @@ function startCloud() {
     api.onAuth((user) => {
       unwatch?.(); unwatch = null;
       if (user) onSignedIn(user);
-      else if (store.isCloud) { social.stop(); store.useLocal(); renderAccountButton(); }
+      else if (store.isCloud) { resetPlanNotices(); social.stop(); store.useLocal(); renderAccountButton(); renderBadges(); }
     });
   });
 }

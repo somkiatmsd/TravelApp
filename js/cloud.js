@@ -100,7 +100,7 @@ export async function initCloud() {
     watch(uid, h) {
       const subs = [
         onSnapshot(collection(db, 'users', uid, 'places'), (s) => h.onPlaces(list(s)), h.onError),
-        onSnapshot(query(collection(db, 'plans'), where('memberIds', 'array-contains', uid)), (s) => h.onPlans(list(s)), h.onError),
+        onSnapshot(query(collection(db, 'plans'), where('memberIds', 'array-contains', uid)), { includeMetadataChanges: true }, (s) => h.onPlans(list(s), s.metadata.fromCache), h.onError),
         onSnapshot(profileRef(uid), { includeMetadataChanges: true }, (s) => h.onProfile(s.exists() ? { ...s.data(), uid } : null, s.metadata.fromCache), h.onError),
         onSnapshot(collection(db, 'profiles', uid, 'friends'), (s) => h.onFriendIds(s.docs.map((d) => d.id)), h.onError),
         onSnapshot(query(collection(db, 'friendRequests'), where('to', '==', uid)), (s) => h.onIncoming(list(s)), h.onError),
