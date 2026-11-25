@@ -62,6 +62,9 @@ let picking = false;
 const pinIcon = (cls, label = '') =>
   L.divIcon({ className: '', html: `<div class="pin ${cls}"><span>${esc(label)}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28] });
 
+// Keep pin popups clear of the search box (top) and the legend / buttons (bottom).
+const POPUP_OPTS = { maxWidth: 300, minWidth: 240, autoPanPaddingTopLeft: [12, 96], autoPanPaddingBottomRight: [12, 70] };
+
 function placePopup(p) {
   const div = document.createElement('div');
   div.className = 'popup';
@@ -74,13 +77,46 @@ function placePopup(p) {
       <button class="chip primary" data-a="toggle">${p.status === 'visited' ? 'ยังไม่ได้ไป' : '✓ ไปแล้ว'}</button>` : ''}
       <a class="chip" href="${directionsUrl(p)}" target="_blank" rel="noopener">นำทาง</a>
       <a class="chip" href="${googleMapsUrl(p)}" target="_blank" rel="noopener">Google Maps</a>
-    </div>`;
+    </div>
+    ${popupPlans(p)}`;
   div.addEventListener('click', (e) => {
     const a = e.target.closest('[data-a]')?.dataset.a;
     if (a === 'edit') { map.closePopup(); openPlaceForm(p.id); }
     if (a === 'toggle') { toggleVisited(p.id); }
+    if (a === 'new-plan') { map.closePopup(); openPlanForm(null, { placeIds: [p.id], stops: own ? [] : [stopOf(p)] }); }
+    if (a === 'open-plan') { map.closePopup(); focusPlan(e.target.closest('[data-plan]').dataset.plan); }
   });
   return div;
+}
+
+/** Plans that include this place, plus "create a plan from here". */
+function popupPlans(p) {
+  const plans = store.plans
+    .filter((pl) => (pl.placeIds || []).includes(p.id))
+    .sort((a, b) => (isClosed(a) - isClosed(b)) || a.start.localeCompare(b.start));
+  return `<div class="popup-plans">
+    <div class="popup-plans-head">แผนที่มีที่นี่ ${plans.length ? `<span class="count">${plans.length}</span>` : ''}</div>
+    ${plans.length ? `<ul>${plans.map((pl) => `<li><button class="popup-plan" data-a="open-plan" data-plan="${esc(pl.id)}">
+        <i style="background:${esc(pl.color || '#0d9488')}"></i>
+        <span class="pp-title">${esc(pl.title)}</span>
+        <small>${isCancelled(pl) ? '❌ ทริปล่ม' : isClosed(pl) ? '🏁 จบแล้ว' : fmtRange(pl.start, pl.end)}</small>
+      </button></li>`).join('')}</ul>` : '<p>ยังไม่อยู่ในแผนไหน</p>'}
+    <button class="chip primary" data-a="new-plan">+ สร้างแผนจากที่นี่</button>
+  </div>`;
+}
+
+/** Go to the Plans tab and bring one plan into view. */
+function focusPlan(id) {
+  expandedPlans.add(id);
+  go('plans');
+  renderPlans();
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`#plan-list li[data-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 1600);
+  });
 }
 
 function renderMarkers() {
@@ -89,7 +125,7 @@ function renderMarkers() {
   store.places.forEach((p) => {
     if (typeof p.lat !== 'number' || typeof p.lng !== 'number') return;
     const m = L.marker([p.lat, p.lng], { icon: pinIcon(p.status === 'visited' ? 'visited' : 'want'), title: p.name })
-      .bindPopup(() => placePopup(store.getPlace(p.id)))
+      .bindPopup(() => placePopup(store.getPlace(p.id)), POPUP_OPTS)
       .addTo(markersLayer);
     markerById.set(p.id, m);
   });
@@ -221,7 +257,7 @@ function showPlanOnMap(planId) {
   L.polyline(pts, { color: plan.color || '#0d9488', weight: 4, opacity: .85, dashArray: '8 8' }).addTo(routeLayer);
   places.forEach((p, i) => {
     L.marker([p.lat, p.lng], { icon: pinIcon(p.status === 'visited' ? 'visited' : 'want', i + 1), zIndexOffset: 1000 })
-      .bindPopup(() => placePopup(store.getPlace(p.id) || p)).addTo(routeLayer);
+      .bindPopup(() => placePopup(store.getPlace(p.id) || p), POPUP_OPTS).addTo(routeLayer);
   });
   const ctl = L.control({ position: 'topleft' });
   ctl.onAdd = () => {
@@ -530,7 +566,7 @@ function openPlanForm(id, preset = {}) {
   formPlan.note.value = pl?.note || '';
   setColor(pl?.color || PLAN_COLORS[store.plans.length % PLAN_COLORS.length]);
   pickedIds = pl ? [...pl.placeIds] : preset.placeIds || [];
-  extraStops = pl?.stops || [];
+  extraStops = pl?.stops || preset.stops || [];
   renderPicker();
   dlgPlan.showModal();
 }

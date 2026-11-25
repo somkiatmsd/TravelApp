@@ -472,3 +472,24 @@ body[data-view="friends"] .fab { display: none; }
 .call-live .chip { margin-left: auto; text-decoration: none; background: var(--visited); border-color: var(--visited); color: #fff; }
 .user-actions a.btn { text-decoration: none; }
 .call-banner .btn { text-decoration: none; }
+
+/* Plans inside a map pin popup */
+.popup a.chip { text-decoration: none; color: inherit; }
+.popup-plans { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+.popup-plans-head { font-size: .8rem; font-weight: 600; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+.popup-plans p { margin: 0; }
+.popup-plans ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 132px; overflow: auto; }
+.popup-plan {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text); text-align: left; font-size: .85rem;
+}
+.popup-plan i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.popup-plan .pp-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.popup-plan small { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.popup-plans > .chip { justify-self: start; }
+.plan-card.flash { box-shadow: 0 0 0 3px var(--primary); transition: box-shadow .3s; }
+
+.leaflet-popup-content .popup { width: min(268px, 68vw); }
+.popup-plans ul li { min-width: 0; }
+.popup-plan { overflow: hidden; }
+.popup-plan small { flex: none; }
