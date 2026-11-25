@@ -172,11 +172,14 @@ export const social = {
 
 let fofLoading = false;
 /** A user's profile if it is public (null for private or hidden ones). */
+/** A user's profile if I may see it: public ones, and my own friends even when private. */
 async function publicProfile(uid) {
   const known = (state.directory || []).find((p) => p.uid === uid);
   if (known) return known;
+  const friend = state.friends.get(uid);
+  if (friend) return { ...friend, uid };
   const p = await state.api.getProfile(uid);
-  return p && p.isPublic ? p : null;
+  return p && (p.isPublic || state.friendIds.includes(uid)) ? p : null;
 }
 
 function syncFriendSubs() {
