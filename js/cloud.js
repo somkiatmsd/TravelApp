@@ -82,6 +82,7 @@ export async function initCloud() {
   const placeRef = (uid, id) => doc(db, 'users', uid, 'places', id);
   const planRef = (id) => doc(db, 'plans', id);
   const profileRef = (uid) => doc(db, 'profiles', uid);
+  const cardRef = (uid) => doc(db, 'cards', uid);
   const friendRef = (uid, fid) => doc(db, 'profiles', uid, 'friends', fid);
   const requestRef = (from, to) => doc(db, 'friendRequests', `${from}_${to}`);
   const clean = (o) => JSON.parse(JSON.stringify(o)); // drop undefined / functions
@@ -159,8 +160,16 @@ export async function initCloud() {
     /* ----- profile ----- */
     saveProfile(uid, profile) {
       const data = { ...profile, nameLower: profile.name.toLowerCase(), updatedAt: now() };
-      ['uid', 'hidden'].forEach((k) => delete data[k]);
-      return setDoc(profileRef(uid), clean(data), { merge: true });
+      ['uid', 'hidden', 'cardOnly'].forEach((k) => delete data[k]);
+      const b = writeBatch(db);
+      b.set(profileRef(uid), clean(data), { merge: true });
+      b.set(cardRef(uid), { name: profile.name, thumb: profile.thumb || '', updatedAt: now() });
+      return b.commit();
+    },
+    /** Name + small photo, readable by every signed-in user (see firestore.rules). */
+    saveCard: (uid, profile) => setDoc(cardRef(uid), { name: profile.name, thumb: profile.thumb || '', updatedAt: now() }),
+    async getCard(uid) {
+      try { const s = await getDoc(cardRef(uid)); return s.exists() ? { ...s.data(), uid } : null; } catch { return null; }
     },
     /** Refresh my name/photo in every plan I'm in. */
     async syncMemberSnapshot(uid, plans, profile) {

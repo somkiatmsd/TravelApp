@@ -59,6 +59,17 @@ service cloud.firestore {
       }
     }
 
+    // cards/{uid}: name + small photo only, readable by any signed-in user,
+    // so friends of friends can show who someone is even when their profile is private.
+    match /cards/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && me() == uid
+        && request.resource.data.keys().hasOnly(['name', 'thumb', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60
+        && optString(request.resource.data, 'thumb', 30000);
+      allow delete: if signedIn() && me() == uid;
+    }
+
     // friendRequests/{from}_{to}
     match /friendRequests/{rid} {
       allow read: if signedIn() && (resource.data.from == me() || resource.data.to == me());

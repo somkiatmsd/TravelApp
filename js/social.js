@@ -21,6 +21,7 @@ const friendSubs = new Map();
 const listeners = new Set();
 const emit = () => listeners.forEach((fn) => fn());
 let createdProfile = false;
+let cardSynced = false;
 let statsTimer = null;
 
 const face = (p) => ({ name: p?.name || p?.fromName || 'ผู้ใช้', photo: p?.thumb || p?.fromThumb || '' });
@@ -59,6 +60,7 @@ export const social = {
     state.uid = user.uid;
     state.user = user;
     createdProfile = false;
+    cardSynced = false;
     return {
       onProfile: (p, fromCache) => {
         if (!p) {
@@ -71,6 +73,10 @@ export const social = {
           state.me = { ...profileFromUser(user), uid: user.uid };
         } else {
           state.me = p;
+          if (!fromCache && !cardSynced) {
+            cardSynced = true;
+            api.saveCard(user.uid, p).catch(() => {});
+          }
         }
         api.setMe(state.me);
         emit();
@@ -179,7 +185,10 @@ async function publicProfile(uid) {
   const friend = state.friends.get(uid);
   if (friend) return { ...friend, uid };
   const p = await state.api.getProfile(uid);
-  return p && (p.isPublic || state.friendIds.includes(uid)) ? p : null;
+  if (p && (p.isPublic || state.friendIds.includes(uid))) return p;
+  // Private profile of someone who isn't my friend: show only their name card.
+  const card = await state.api.getCard(uid);
+  return card ? { uid, name: card.name, thumb: card.thumb, isPublic: false, hidden: true, cardOnly: true } : null;
 }
 
 function syncFriendSubs() {
@@ -217,10 +226,11 @@ async function runAction(act, uid, name = '') {
 }
 
 function personRow(p, sub = '') {
+  const locked = p.cardOnly && social.relation(p.uid) === 'none';
   return `<li class="person" data-open="${esc(p.uid)}">
     ${avatar(face(p))}
     <div class="who"><b>${esc(p.name || 'ผู้ใช้')}</b><small>${sub}</small></div>
-    <div class="acts">${actionButtons(p.uid, true)}</div>
+    <div class="acts">${locked ? '<span class="role">🔒 ส่วนตัว</span>' : actionButtons(p.uid, true)}</div>
   </li>`;
 }
 
@@ -325,7 +335,8 @@ let userFriends; // undefined = not shown / loading, [] = none
 export async function openUser(uid, fallback = null) {
   const dlg = $('#dlg-user');
   viewing = uid;
-  let p = uid === state.uid ? state.me : state.friends.get(uid) || findDir(uid) || null;
+  let p = uid === state.uid ? state.me : state.friends.get(uid) || findDir(uid)
+    || (state.fof || []).find((x) => x.uid === uid) || (userFriends || []).find((x) => x.uid === uid) || null;
   if (!p) {
     const req = state.incoming.find((r) => r.from === uid);
     p = fallback || (req ? { name: req.fromName, thumb: req.fromThumb, hidden: true } : null);
@@ -367,7 +378,7 @@ function renderUser(uid, p) {
       <div><b>${s.plans ?? 0}</b><small>แผนเที่ยว</small></div>
     </div>`}
     ${sharedPlans.length ? `<p class="muted small center">เที่ยวด้วยกันใน ${sharedPlans.map((pl) => `“${esc(pl.title)}”`).join(', ')}</p>` : ''}
-    <div class="user-actions">${rel === 'me' ? '<button class="btn primary" data-edit-profile>แก้ไขโปรไฟล์</button>' : actionButtons(uid)}</div>
+    <div class="user-actions">${rel === 'me' ? '<button class="btn primary" data-edit-profile>แก้ไขโปรไฟล์</button>' : rel === 'none' && p.hidden ? '' : actionButtons(uid)}</div>
     ${rel === 'none' && p.hidden ? '<p class="muted small center">ส่งคำขอได้เฉพาะโปรไฟล์สาธารณะ</p>' : ''}
     ${rel === 'friend' ? `<h3 class="sec">เพื่อนของ ${esc(p.name || '')}${userFriends ? ` <span class="count">${userFriends.length}</span>` : ''}</h3>
       ${userFriends === undefined ? '<p class="muted pad-s">กำลังโหลด…</p>'
