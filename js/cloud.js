@@ -137,6 +137,7 @@ export async function initCloud() {
         onSnapshot(collection(db, 'profiles', uid, 'friends'), (s) => h.onFriendIds(s.docs.map((d) => d.id)), h.onError),
         onSnapshot(query(collection(db, 'friendRequests'), where('to', '==', uid)), (s) => h.onIncoming(list(s)), h.onError),
         onSnapshot(query(collection(db, 'friendRequests'), where('from', '==', uid)), (s) => h.onOutgoing(list(s)), h.onError),
+        onSnapshot(query(collection(db, 'calls'), where('to', '==', uid)), (s) => h.onCalls?.(list(s)), h.onError),
       ];
       return () => subs.forEach((u) => u());
     },
@@ -180,6 +181,15 @@ export async function initCloud() {
     },
 
     /* ----- friends ----- */
+    /* ----- calls ----- */
+    ringFriend(uid, to, room) {
+      return setDoc(doc(db, 'calls', `${uid}_${to}`), { from: uid, to, fromName: me?.name || 'เพื่อน', fromThumb: me?.thumb || '', room, at: now() });
+    },
+    endCall: (id) => deleteDoc(doc(db, 'calls', id)),
+    startPlanCall(planId, uid) {
+      return updateDoc(planRef(planId), { call: { by: uid, name: me?.name || 'เพื่อน', thumb: me?.thumb || '', at: now() }, updatedAt: now() });
+    },
+
     sendRequest(uid, to) {
       return setDoc(requestRef(uid, to), { from: uid, to, fromName: me?.name || 'ผู้ใช้', fromThumb: me?.thumb || '', createdAt: now() });
     },

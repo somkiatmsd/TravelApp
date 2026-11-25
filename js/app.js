@@ -2,6 +2,7 @@ import { store, loadLocal } from './store.js';
 import { initCloud, cloudConfigured, AUTH_ERRORS, USERNAME_RE, normalizeUsername } from './cloud.js';
 import { $, $$, esc, toast, avatar } from './ui.js';
 import { searchPlaces, googleSearchEnabled, directionsUrl, googleMapsUrl } from './search.js';
+import { roomUrl, planRoom, showBanner, hideBanner, hasBanner, minutesSince, agoText, RING_MINUTES, LIVE_MINUTES } from './calls.js';
 import { social, renderFriendsView, bindFriendsView, bindUserDialog, openUser, renderProfileEditor, resetProfileDraft } from './social.js';
 
 /* ---------- helpers ---------- */
@@ -675,11 +676,14 @@ function renderPlans() {
           <div class="progress" title="ไปแล้ว ${done}/${places.length}"><i style="width:${(done / places.length) * 100}%"></i></div>
           <div class="meta">ไปแล้ว ${done}/${places.length} ที่</div>` : '<p class="note">ยังไม่ได้เลือกสถานที่</p>'}
         ${pl.note ? `<p class="note">${esc(pl.note)}</p>` : ''}
+        ${callLine(pl)}
         ${membersRow(pl)}
         <div class="row">
           <button class="chip" data-a="map">ดูเส้นทาง</button>
           <button class="chip" data-a="cal">ดูในปฏิทิน</button>
           <button class="chip" data-a="members">👥 เพื่อนร่วมทาง</button>
+          ${store.isCloud && (pl.memberIds || []).length > 1 && !isClosed(pl)
+            ? `<a class="chip call-chip" data-a="call" href="${esc(roomUrl(planRoom(pl), social.me?.name))}" target="_blank" rel="noopener">📞 โทรกลุ่ม</a>` : ''}
           <button class="chip" data-a="edit">แก้ไข</button>
           ${store.isCloud && !store.isOwner(pl) ? '<button class="chip danger-chip" data-a="leave">ออกจากแผน</button>' : ''}
           ${closeButtons(pl, places)}
@@ -695,6 +699,13 @@ $('#plan-list').addEventListener('click', (e) => {
   if (a === 'map') showPlanOnMap(pl.id);
   if (a === 'edit') openPlanForm(pl.id);
   if (a === 'members') openMembers(pl.id);
+  if (a === 'call' || a === 'join-call') {
+    // The link opens the room; tell the others a call has started.
+    if (a === 'call' && !(minutesSince(pl.call?.at) < RING_MINUTES)) {
+      cloudApi?.startPlanCall(pl.id, social.uid).catch((err) => toast(cloudError(err)));
+    }
+    hideBanner(`plan:${pl.id}`);
+  }
   if (a === 'finish') finishPlan(pl);
   if (a === 'cancel-trip' && confirm(`ทริป “${pl.title}” ล่ม? ทริปจะถูกปิด และทุกคนในทริปจะเห็นว่าทริปล่ม`)) cancelPlan(pl);
   if (a === 'reopen') {
@@ -788,6 +799,63 @@ function cancelPlan(pl) {
   expandedPlans.delete(pl.id);
   store.savePlan({ id: pl.id, finishedAt: new Date().toISOString(), outcome: 'cancelled' });
   toast(`❌ ปิดทริป “${pl.title}” ว่าทริปล่มแล้ว`);
+}
+
+/* ---------- calls ---------- */
+/** "📞 Alice started a group call 3 min ago — join" line on a plan card. */
+function callLine(pl) {
+  if (!store.isCloud || !pl.call || !(minutesSince(pl.call.at) < LIVE_MINUTES) || isClosed(pl)) return '';
+  const mine = pl.call.by === social.uid;
+  return `<div class="call-live">📞 ${mine ? 'คุณ' : esc(pl.call.name || 'เพื่อน')} เริ่มโทรกลุ่ม ${agoText(pl.call.at)}
+    <a class="chip primary" data-a="join-call" href="${esc(roomUrl(planRoom(pl), social.me?.name))}" target="_blank" rel="noopener">เข้าร่วม</a></div>`;
+}
+
+const seenCalls = new Set(); // banners already shown or closed (this session)
+
+/** A friend started a group call in one of my plans → banner. */
+function notifyPlanCalls() {
+  store.plans.forEach((pl) => {
+    const c = pl.call;
+    const key = `plan:${pl.id}`;
+    if (!c || c.by === social.uid || !(minutesSince(c.at) < RING_MINUTES) || isClosed(pl)) { hideBanner(key); return; }
+    const id = `${key}:${c.at}`;
+    if (seenCalls.has(id) || hasBanner(key)) return;
+    seenCalls.add(id);
+    showBanner(key, {
+      who: { name: c.name, photo: c.thumb },
+      text: `<b>${esc(c.name || 'เพื่อน')}</b> เริ่มโทรกลุ่มในแผน “${esc(pl.title)}”`,
+      url: roomUrl(planRoom(pl), social.me?.name),
+      joinLabel: 'เข้าร่วม',
+    });
+  });
+}
+
+/** A friend is calling me → banner with answer / decline. */
+function notifyFriendCalls(calls) {
+  const live = new Set();
+  calls.forEach((c) => {
+    if (!(minutesSince(c.at) < RING_MINUTES)) { cloudApi?.endCall(c.id).catch(() => {}); return; }
+    const key = `call:${c.id}`;
+    live.add(key);
+    const id = `${key}:${c.at}`;
+    if (seenCalls.has(id)) return;
+    seenCalls.add(id);
+    showBanner(key, {
+      who: { name: c.fromName, photo: c.fromThumb },
+      text: `<b>${esc(c.fromName || 'เพื่อน')}</b> โทรหาคุณ`,
+      url: roomUrl(c.room, social.me?.name),
+      joinLabel: 'รับสาย',
+      onJoin: () => cloudApi?.endCall(c.id).catch(() => {}),
+      onDismiss: () => cloudApi?.endCall(c.id).catch(() => {}),
+    });
+  });
+  // The caller hung up (deleted the ring) → remove its banner.
+  document.querySelectorAll('.call-banner[data-key^="call:"]').forEach((el) => { if (!live.has(el.dataset.key)) hideBanner(el.dataset.key); });
+}
+
+function clearCallBanners() {
+  document.querySelectorAll('.call-banner').forEach((el) => hideBanner(el.dataset.key));
+  seenCalls.clear();
 }
 
 /* ---------- companions (friends only) ---------- */
@@ -1153,11 +1221,13 @@ async function onSignedIn(user) {
   const trySync = () => { if (gotPlans && gotProfile) { gotPlans = gotProfile = false; social.syncPlans(); } };
   unwatch = cloudApi.watch(user.uid, {
     ...h,
+    onCalls: (calls) => notifyFriendCalls(calls),
     onProfile: (p, fromCache) => { h.onProfile(p, fromCache); if (p && !fromCache) { gotProfile = true; trySync(); } },
     onPlaces: (places) => { store.setPlaces(places); if (firstPlaces) { firstPlaces = false; fitAll(); } },
     onPlans: (plans, fromCache) => {
       store.setPlans(plans);
       onPlansArrived(fromCache);
+      if (!fromCache) notifyPlanCalls();
       if (!gotPlans && !fromCache) { gotPlans = true; trySync(); }
     },
     onError: (err) => toast(cloudError(err)),
@@ -1176,7 +1246,7 @@ function startCloud() {
     api.onAuth((user) => {
       unwatch?.(); unwatch = null;
       if (user) onSignedIn(user);
-      else if (store.isCloud) { resetPlanNotices(); social.stop(); store.useLocal(); renderAccountButton(); renderBadges(); }
+      else if (store.isCloud) { clearCallBanners(); resetPlanNotices(); social.stop(); store.useLocal(); renderAccountButton(); renderBadges(); }
     });
   });
 }

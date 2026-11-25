@@ -2,6 +2,7 @@
 import { store } from './store.js';
 import { profileFromUser, isUsernameAccount, usernameOf } from './cloud.js';
 import { $, esc, toast, avatar, resizeImage } from './ui.js';
+import { roomUrl, newRoom } from './calls.js';
 
 const state = {
   api: null,
@@ -354,6 +355,12 @@ export async function openUser(uid, fallback = null) {
   }
 }
 
+/** "📞 โทร": opens a new room and rings the friend (they see it while the app is open). */
+function callButton() {
+  const room = newRoom();
+  return `<a class="btn primary" href="${esc(roomUrl(room, state.me?.name))}" target="_blank" rel="noopener" data-call-room="${esc(room)}">📞 โทร</a>`;
+}
+
 function renderUser(uid, p) {
   const body = $('#user-body');
   if (!p) {
@@ -378,7 +385,7 @@ function renderUser(uid, p) {
       <div><b>${s.plans ?? 0}</b><small>แผนเที่ยว</small></div>
     </div>`}
     ${sharedPlans.length ? `<p class="muted small center">เที่ยวด้วยกันใน ${sharedPlans.map((pl) => `“${esc(pl.title)}”`).join(', ')}</p>` : ''}
-    <div class="user-actions">${rel === 'me' ? '<button class="btn primary" data-edit-profile>แก้ไขโปรไฟล์</button>' : rel === 'none' && p.hidden ? '' : actionButtons(uid)}</div>
+    <div class="user-actions">${rel === 'friend' ? callButton() : ''}${rel === 'me' ? '<button class="btn primary" data-edit-profile>แก้ไขโปรไฟล์</button>' : rel === 'none' && p.hidden ? '' : actionButtons(uid)}</div>
     ${rel === 'none' && p.hidden ? '<p class="muted small center">ส่งคำขอได้เฉพาะโปรไฟล์สาธารณะ</p>' : ''}
     ${rel === 'friend' ? `<h3 class="sec">เพื่อนของ ${esc(p.name || '')}${userFriends ? ` <span class="count">${userFriends.length}</span>` : ''}</h3>
       ${userFriends === undefined ? '<p class="muted pad-s">กำลังโหลด…</p>'
@@ -391,6 +398,14 @@ export function bindUserDialog({ openAccount }) {
   const dlg = $('#dlg-user');
   dlg.addEventListener('click', (e) => {
     if (e.target.closest('[data-edit-profile]')) { dlg.close(); return openAccount(); }
+    const call = e.target.closest('[data-call-room]');
+    if (call && viewing) {
+      const to = viewing;
+      state.api.ringFriend(state.uid, to, call.dataset.callRoom)
+        .then(() => toast(`📞 กำลังโทรหา ${state.friends.get(to)?.name || 'เพื่อน'}…`))
+        .catch((err) => toast(errMsg(err)));
+      return;
+    }
     const btn = e.target.closest('[data-act]');
     if (btn) {
       const row = btn.closest('[data-open]');

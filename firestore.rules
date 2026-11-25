@@ -70,6 +70,22 @@ service cloud.firestore {
       allow delete: if signedIn() && me() == uid;
     }
 
+    // calls/{from}_{to}: "I'm calling you" — a friend rings a friend; the callee sees it while the app is open.
+    function validCall(d) {
+      return d.keys().hasOnly(['from', 'to', 'fromName', 'fromThumb', 'room', 'at'])
+        && d.from == me() && d.to is string && d.to != me()
+        && d.room is string && d.room.size() <= 200
+        && d.fromName is string && d.fromName.size() <= 60
+        && optString(d, 'fromThumb', 30000)
+        && isFriend(me(), d.to);
+    }
+    match /calls/{cid} {
+      allow read: if signedIn() && (resource.data.from == me() || resource.data.to == me());
+      allow create: if signedIn() && validCall(request.resource.data) && cid == me() + '_' + request.resource.data.to;
+      allow update: if signedIn() && resource.data.from == me() && validCall(request.resource.data) && cid == me() + '_' + request.resource.data.to;
+      allow delete: if signedIn() && (resource.data.from == me() || resource.data.to == me());
+    }
+
     // friendRequests/{from}_{to}
     match /friendRequests/{rid} {
       allow read: if signedIn() && (resource.data.from == me() || resource.data.to == me());
@@ -111,7 +127,8 @@ service cloud.firestore {
 
         // member: edit trip content
         || (me() in resource.data.memberIds
-          && changed().hasOnly(['title', 'start', 'end', 'color', 'note', 'placeIds', 'stops', 'updatedAt']))
+          && changed().hasOnly(['title', 'start', 'end', 'color', 'note', 'placeIds', 'stops', 'call', 'updatedAt'])
+          && (!('call' in request.resource.data) || request.resource.data.call is map))
 
         // member: refresh own name/photo shown in the plan
         || (me() in resource.data.memberIds
