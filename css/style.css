@@ -434,3 +434,15 @@ body[data-view="friends"] .fab { display: none; }
 .plan-card .tag.done-chip, .plan-card .tag.cancel-chip { border: 1px solid; }
 .plan-card .tag.done-chip { color: var(--visited); background: color-mix(in srgb, var(--visited) 10%, var(--surface)); }
 .cal-cell .ev.cancelled { opacity: .55; text-decoration: line-through; }
+
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .8rem; margin: 6px 0 10px; }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.auth-tabs { margin: 0 0 10px; position: static; }
+.userpass { display: grid; gap: 4px; margin-bottom: 10px; }
+.userpass label, #change-pass label { margin: 4px 0 0; }
+.userpass small { font-size: .74rem; line-height: 1.4; }
+.userpass .btn { margin-top: 8px; }
+.userpass .notice { margin: 6px 0 0; }
+#change-pass { display: grid; gap: 4px; margin: 0 0 10px; }
+#change-pass[hidden] { display: none; }
+.linkish { border: 0; background: none; padding: 0; color: var(--primary); text-decoration: underline; font-size: inherit; }

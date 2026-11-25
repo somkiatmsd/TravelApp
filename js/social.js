@@ -1,6 +1,6 @@
 // Profiles and friends: my profile editor, the Friends tab, and the public profile page.
 import { store } from './store.js';
-import { profileFromUser } from './cloud.js';
+import { profileFromUser, isUsernameAccount, usernameOf } from './cloud.js';
 import { $, esc, toast, avatar, resizeImage } from './ui.js';
 
 const state = {
@@ -419,7 +419,16 @@ export function renderProfileEditor(root, { onSignOut }) {
         <input type="checkbox" id="profile-public" name="isPublic" ${me.isPublic ? 'checked' : ''}>
         <span><b>โปรไฟล์สาธารณะ</b><small>ผู้ใช้อื่นที่ไม่ใช่เพื่อนจะเห็นชื่อ รูป แนะนำตัว และจำนวนที่เที่ยว และส่งคำขอเป็นเพื่อนได้ (สถานที่และแผนยังเป็นส่วนตัว)</small></span>
       </label>
-      <p class="muted small">อีเมล ${esc(state.user?.email || '')} ไม่แสดงให้ผู้อื่นเห็น</p>
+      <p class="muted small">${isUsernameAccount(state.user)
+        ? `เข้าระบบด้วยชื่อผู้ใช้ <b>${esc(usernameOf(state.user))}</b> (ไม่แสดงให้ผู้อื่นเห็น) · <button type="button" class="linkish" id="btn-change-pass">เปลี่ยนรหัสผ่าน</button>`
+        : `อีเมล ${esc(state.user?.email || '')} ไม่แสดงให้ผู้อื่นเห็น`}</p>
+      <div id="change-pass" hidden>
+        <label for="cp-current">รหัสผ่านปัจจุบัน</label>
+        <input id="cp-current" type="password" autocomplete="current-password">
+        <label for="cp-new">รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)</label>
+        <input id="cp-new" type="password" autocomplete="new-password" minlength="6">
+        <button type="button" class="btn" id="btn-save-pass">บันทึกรหัสผ่านใหม่</button>
+      </div>
       <div class="sheet-actions">
         <button type="button" class="btn danger" id="btn-signout">ออกจากระบบ</button>
         <span class="spacer"></span>
@@ -445,6 +454,22 @@ export function renderProfileEditor(root, { onSignOut }) {
     rerender();
   });
   $('#btn-signout').onclick = onSignOut;
+  $('#btn-change-pass')?.addEventListener('click', () => { $('#change-pass').hidden = false; $('#cp-current').focus(); });
+  $('#btn-save-pass')?.addEventListener('click', async () => {
+    const cur = $('#cp-current').value;
+    const next = $('#cp-new').value;
+    if (next.length < 6) return toast('รหัสผ่านใหม่ต้องยาวอย่างน้อย 6 ตัวอักษร');
+    try {
+      await state.api.changePassword(cur, next);
+      $('#change-pass').hidden = true;
+      $('#cp-current').value = '';
+      $('#cp-new').value = '';
+      toast('เปลี่ยนรหัสผ่านแล้ว');
+    } catch (err) {
+      const wrong = ['auth/invalid-credential', 'auth/wrong-password', 'auth/invalid-login-credentials'].includes(err.code);
+      toast(wrong ? 'รหัสผ่านปัจจุบันไม่ถูกต้อง' : errMsg(err));
+    }
+  });
   f.onsubmit = async (e) => {
     e.preventDefault();
     const name = f.name.value.trim();

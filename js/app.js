@@ -1,5 +1,5 @@
 import { store, loadLocal } from './store.js';
-import { initCloud, cloudConfigured, AUTH_ERRORS } from './cloud.js';
+import { initCloud, cloudConfigured, AUTH_ERRORS, USERNAME_RE, normalizeUsername } from './cloud.js';
 import { $, $$, esc, toast, avatar } from './ui.js';
 import { searchPlaces, googleSearchEnabled, directionsUrl, googleMapsUrl } from './search.js';
 import { social, renderFriendsView, bindFriendsView, bindUserDialog, openUser, renderProfileEditor, resetProfileDraft } from './social.js';
@@ -1032,12 +1032,65 @@ function renderAccount() {
     });
     return;
   }
+  const signup = authMode === 'signup';
   body.innerHTML = `${msg}<p class="muted">เข้าสู่ระบบเพื่อซิงก์ข้อมูลข้ามเครื่อง ตั้งชื่อและรูปของคุณ เพิ่มเพื่อน และชวนเพื่อนไปเที่ยวตามแผนเดียวกัน</p>
     <div class="signin">
       <button id="btn-google" ${busy ? 'disabled' : ''}>${GOOGLE_SVG}เข้าสู่ระบบด้วย Google</button>
     </div>
+    <div class="or"><span>หรือใช้ชื่อผู้ใช้ (ไม่ต้องมีอีเมล)</span></div>
+    <div class="segmented auth-tabs" role="tablist">
+      <button type="button" role="tab" class="seg ${signup ? '' : 'active'}" data-mode="login">เข้าสู่ระบบ</button>
+      <button type="button" role="tab" class="seg ${signup ? 'active' : ''}" data-mode="signup">สมัครใหม่</button>
+    </div>
+    <form id="form-userpass" class="userpass" autocomplete="on" novalidate>
+      <label for="up-username">ชื่อผู้ใช้</label>
+      <input id="up-username" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
+        inputmode="email" maxlength="20" required placeholder="เช่น somkiat" value="${esc(draftUsername)}">
+      ${signup ? '<small class="muted">ภาษาอังกฤษตัวเล็ก ตัวเลข จุด หรือ _ ยาว 3–20 ตัว ใช้สำหรับเข้าระบบเท่านั้น (ชื่อที่แสดงตั้งทีหลังได้)</small>' : ''}
+      <label for="up-password">รหัสผ่าน</label>
+      <input id="up-password" name="password" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" minlength="6" required>
+      ${signup ? `<label for="up-password2">ยืนยันรหัสผ่าน</label>
+      <input id="up-password2" name="password2" type="password" autocomplete="new-password" minlength="6" required>
+      <p class="notice small">⚠️ จดรหัสผ่านไว้ให้ดี บัญชีแบบนี้ไม่มีอีเมล ถ้าลืมรหัสผ่านจะกู้คืนเองไม่ได้</p>` : ''}
+      <button type="submit" class="btn primary" ${busy ? 'disabled' : ''}>${signup ? 'สมัครและเข้าสู่ระบบ' : 'เข้าสู่ระบบ'}</button>
+    </form>
     <p class="muted small">ครั้งแรกที่เข้าระบบ สถานที่และแผนที่มีอยู่ในเครื่องนี้จะถูกอัปโหลดเข้าบัญชีให้</p>`;
   $('#btn-google').onclick = () => signIn();
+  $$('.auth-tabs .seg').forEach((b) => b.addEventListener('click', () => {
+    draftUsername = $('#up-username').value;
+    authMode = b.dataset.mode;
+    accountMsg = '';
+    renderAccount();
+  }));
+  $('#form-userpass').onsubmit = (e) => { e.preventDefault(); signInUsername(e.target); };
+}
+
+let authMode = 'login';
+let draftUsername = '';
+
+async function signInUsername(f) {
+  const username = normalizeUsername(f.username.value);
+  const password = f.password.value;
+  draftUsername = username;
+  const fail = (m) => { accountMsg = m; renderAccount(); $('#up-password')?.focus(); };
+  if (!USERNAME_RE.test(username)) return fail('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษตัวเล็ก ตัวเลข จุด หรือ _ ยาว 3–20 ตัว');
+  if (password.length < 6) return fail('รหัสผ่านต้องยาวอย่างน้อย 6 ตัวอักษร');
+  if (authMode === 'signup' && password !== f.password2.value) return fail('ยืนยันรหัสผ่านไม่ตรงกัน');
+  busy = true; accountMsg = ''; renderAccount();
+  try {
+    const api = await cloudReady;
+    if (!api) throw new Error('เชื่อมต่อระบบสมาชิกไม่ได้ (ต้องใช้อินเทอร์เน็ต)');
+    if (authMode === 'signup') await api.signUpWithUsername(username, password);
+    else await api.signInWithUsername(username, password);
+    draftUsername = '';
+    authMode = 'login';
+    dlgAccount.close();
+  } catch (err) {
+    accountMsg = cloudError(err);
+  } finally {
+    busy = false;
+    if (dlgAccount.open) renderAccount();
+  }
 }
 
 async function signIn() {

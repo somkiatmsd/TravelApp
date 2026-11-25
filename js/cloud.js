@@ -24,11 +24,26 @@ export function profileFromUser(user) {
 /** What a plan shows for one member. */
 export const memberSnapshot = (profile) => ({ name: profile?.name || 'สมาชิก', thumb: profile?.thumb || '' });
 
+/* Username accounts: Firebase Email/Password with an internal address (no real email needed). */
+const USERNAME_DOMAIN = 'users.wanderpin.app';
+export const USERNAME_RE = /^[a-z0-9._]{3,20}$/;
+export const normalizeUsername = (u) => (u || '').trim().toLowerCase();
+export const isUsernameAccount = (user) => Boolean(user?.email?.endsWith(`@${USERNAME_DOMAIN}`));
+export const usernameOf = (user) => (isUsernameAccount(user) ? user.email.split('@')[0] : '');
+
 export const AUTH_ERRORS = {
+  'auth/invalid-credential': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
+  'auth/invalid-login-credentials': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
+  'auth/wrong-password': 'รหัสผ่านไม่ถูกต้อง',
+  'auth/user-not-found': 'ไม่พบชื่อผู้ใช้นี้ ถ้ายังไม่มีบัญชีให้กด “สมัครใหม่”',
+  'auth/email-already-in-use': 'ชื่อผู้ใช้นี้มีคนใช้แล้ว ลองชื่ออื่น',
+  'auth/weak-password': 'รหัสผ่านต้องยาวอย่างน้อย 6 ตัวอักษร',
+  'auth/too-many-requests': 'ลองหลายครั้งเกินไป รอสักครู่แล้วลองใหม่',
+  'auth/requires-recent-login': 'กรุณาออกจากระบบแล้วเข้าใหม่ก่อนเปลี่ยนรหัสผ่าน',
   'auth/popup-closed-by-user': 'ปิดหน้าต่างเข้าสู่ระบบก่อนเสร็จ',
   'auth/cancelled-popup-request': 'ยกเลิกการเข้าสู่ระบบ',
   'auth/unauthorized-domain': 'โดเมนนี้ยังไม่ได้รับอนุญาต เพิ่มโดเมนใน Firebase → Authentication → Settings → Authorized domains',
-  'auth/operation-not-allowed': 'ยังไม่ได้เปิดใช้การเข้าสู่ระบบด้วย Google ใน Firebase console',
+  'auth/operation-not-allowed': 'ยังไม่ได้เปิดใช้วิธีเข้าสู่ระบบนี้ใน Firebase console (Authentication → Sign-in method)',
   'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่ได้',
 };
 
@@ -95,6 +110,22 @@ export async function initCloud() {
       }
     },
     signOut: () => authMod.signOut(auth),
+
+    /* ----- username + password ----- */
+    signInWithUsername(username, password) {
+      return authMod.signInWithEmailAndPassword(auth, `${normalizeUsername(username)}@${USERNAME_DOMAIN}`, password);
+    },
+    async signUpWithUsername(username, password) {
+      const u = normalizeUsername(username);
+      const cred = await authMod.createUserWithEmailAndPassword(auth, `${u}@${USERNAME_DOMAIN}`, password);
+      await authMod.updateProfile(cred.user, { displayName: u }).catch(() => {});
+      return cred;
+    },
+    async changePassword(current, next) {
+      const user = auth.currentUser;
+      await authMod.reauthenticateWithCredential(user, authMod.EmailAuthProvider.credential(user.email, current));
+      await authMod.updatePassword(user, next);
+    },
 
     /* ----- live data ----- */
     watch(uid, h) {
