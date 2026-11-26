@@ -186,6 +186,11 @@
       </label>
       <fieldset>
         <legend>สถานที่ในแผน <small>(แตะเพื่อเลือก ลำดับตามที่เลือก)</small></legend>
+        <div class="plan-search">
+          <input id="plan-search" type="search" placeholder="ค้นหาสถานที่ใหม่เพื่อเพิ่มเข้าแผน…" aria-label="ค้นหาสถานที่ใหม่เพื่อเพิ่มเข้าแผน" enterkeyhint="search">
+          <button type="button" class="btn" id="plan-search-btn">ค้นหา</button>
+        </div>
+        <ul id="plan-search-results" class="search-results inline" hidden></ul>
         <ul id="plan-place-picker" class="picker"></ul>
       </fieldset>
       <label>บันทึก / งบประมาณ

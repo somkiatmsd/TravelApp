@@ -1,5 +1,5 @@
 // Service worker: offline app shell + cached map tiles.
-const VERSION = 'v21';
+const VERSION = 'v22';
 const SHELL = `wanderpin-shell-${VERSION}`;
 const TILES = 'wanderpin-tiles';
 const MAX_TILES = 1500;
@@ -16,6 +16,7 @@ const ASSETS = [
   './js/ui.js',
   './js/search.js',
   './js/calls.js',
+  './js/basemap.js',
   './js/maps-config.js',
   './js/firebase-config.js',
   './vendor/leaflet/leaflet.js',

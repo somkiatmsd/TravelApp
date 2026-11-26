@@ -2,6 +2,7 @@ import { store, loadLocal } from './store.js';
 import { initCloud, cloudConfigured, AUTH_ERRORS, USERNAME_RE, normalizeUsername } from './cloud.js';
 import { $, $$, esc, toast, avatar } from './ui.js';
 import { searchPlaces, googleSearchEnabled, directionsUrl, googleMapsUrl } from './search.js';
+import { setupBasemap } from './basemap.js';
 import { roomUrl, planRoom, showBanner, hideBanner, hasBanner, minutesSince, agoText, RING_MINUTES, LIVE_MINUTES } from './calls.js';
 import { social, renderFriendsView, bindFriendsView, bindUserDialog, openUser, renderProfileEditor, resetProfileDraft } from './social.js';
 
@@ -48,10 +49,7 @@ $$('.tab').forEach((t) => t.addEventListener('click', () => go(t.dataset.go)));
 /* ---------- map ---------- */
 const map = L.map('map', { zoomControl: false }).setView([13.7563, 100.5018], 6);
 L.control.zoom({ position: 'topright' }).addTo(map);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; OpenStreetMap',
-}).addTo(map);
+setupBasemap(map); // Google map imagery when available, OpenStreetMap otherwise / offline
 
 const markersLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
@@ -83,6 +81,14 @@ function placePopup(p) {
     const a = e.target.closest('[data-a]')?.dataset.a;
     if (a === 'edit') { map.closePopup(); openPlaceForm(p.id); }
     if (a === 'toggle') { toggleVisited(p.id); }
+    // Hide (not remove) the button: a removed click target would look like a tap on the map and close the popup.
+    if (a === 'show-add') { div.querySelector('.add-to-plan').hidden = false; e.target.closest('button').hidden = true; }
+    if (a === 'add-to-plan') {
+      const pl = store.getPlan(e.target.closest('[data-plan]').dataset.plan);
+      addPlaceToPlan(pl, p);
+      map.closePopup();
+      toast(`เพิ่ม “${p.name}” เข้าแผน “${pl.title}” แล้ว`);
+    }
     if (a === 'new-plan') { map.closePopup(); openPlanForm(null, { placeIds: [p.id], stops: own ? [] : [stopOf(p)] }); }
     if (a === 'open-plan') { map.closePopup(); focusPlan(e.target.closest('[data-plan]').dataset.plan); }
   });
@@ -101,8 +107,29 @@ function popupPlans(p) {
         <span class="pp-title">${esc(pl.title)}</span>
         <small>${isCancelled(pl) ? '❌ ทริปล่ม' : isClosed(pl) ? '🏁 จบแล้ว' : fmtRange(pl.start, pl.end)}</small>
       </button></li>`).join('')}</ul>` : '<p>ยังไม่อยู่ในแผนไหน</p>'}
-    <button class="chip primary" data-a="new-plan">+ สร้างแผนจากที่นี่</button>
+    <div class="row">
+      ${addable(p).length ? '<button class="chip" data-a="show-add">+ เพิ่มเข้าแผน</button>' : ''}
+      <button class="chip primary" data-a="new-plan">+ สร้างแผนใหม่</button>
+    </div>
+    ${addable(p).length ? `<ul class="add-to-plan" hidden>${addable(p).map((pl) => `<li><button class="popup-plan" data-a="add-to-plan" data-plan="${esc(pl.id)}">
+        <i style="background:${esc(pl.color || '#0d9488')}"></i>
+        <span class="pp-title">${esc(pl.title)}</span>
+        <small>+ เพิ่ม</small>
+      </button></li>`).join('')}</ul>` : ''}
   </div>`;
+}
+
+/** Open plans this place could be added to. */
+const addable = (p) => store.plans
+  .filter((pl) => !isClosed(pl) && !(pl.placeIds || []).includes(p.id))
+  .sort((a, b) => a.start.localeCompare(b.start));
+
+/** Append a place to a plan (keeps the plan's snapshot of places in step). */
+function addPlaceToPlan(pl, place) {
+  if ((pl.placeIds || []).includes(place.id)) return;
+  const placeIds = [...(pl.placeIds || []), place.id];
+  const stops = [...(pl.stops || []).filter((s) => s.id !== place.id), stopOf(place)];
+  store.savePlan({ id: pl.id, placeIds, stops });
 }
 
 /** Go to the Plans tab and bring one plan into view. */
@@ -548,6 +575,55 @@ $('#plan-place-picker').addEventListener('click', (e) => {
   renderPicker();
 });
 
+/* Search for new places right inside the plan form; each result can be added (several in a row). */
+let planResults = [];
+async function planSearch() {
+  const q = $('#plan-search').value.trim();
+  const ul = $('#plan-search-results');
+  if (!q) { ul.hidden = true; return; }
+  ul.hidden = false;
+  ul.innerHTML = '<li>กำลังค้นหา…</li>';
+  try {
+    const c = map.getCenter();
+    const { source, items } = await searchPlaces(q, { lat: c.lat, lng: c.lng });
+    planResults = items;
+    renderPlanResults(source);
+  } catch {
+    ul.innerHTML = '<li>ค้นหาไม่สำเร็จ (ต้องเชื่อมต่ออินเทอร์เน็ต)</li>';
+  }
+}
+const existingFor = (it) => store.places.find((p) => (it.gmapsId && p.gmapsId === it.gmapsId)
+  || (p.name === it.name && Math.abs(p.lat - it.lat) < 0.0005 && Math.abs(p.lng - it.lng) < 0.0005));
+function renderPlanResults(source) {
+  const ul = $('#plan-search-results');
+  if (!planResults.length) { ul.innerHTML = '<li>ไม่พบสถานที่ ลองใส่ชื่อจังหวัดด้วย</li>'; return; }
+  ul.innerHTML = planResults.map((it, i) => {
+    const added = pickedIds.includes(existingFor(it)?.id);
+    return `<li data-i="${i}" class="${added ? 'added' : ''}">
+      <span>${it.category ? icon(it.category) + ' ' : ''}${esc(it.name)}<small>${esc(it.address)}</small></span>
+      <b>${added ? '✓ อยู่ในแผน' : '+ เพิ่ม'}</b></li>`;
+  }).join('') + `<li class="credit">${source === 'google' ? 'ผลการค้นหาโดย Google' : 'ผลการค้นหาจาก OpenStreetMap'}</li>`;
+  ul.dataset.source = source;
+}
+$('#plan-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); planSearch(); } });
+$('#plan-search-btn').addEventListener('click', planSearch);
+$('#plan-search-results').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-i]');
+  if (!li) return;
+  const it = planResults[+li.dataset.i];
+  let place = existingFor(it);
+  if (!place) {
+    place = store.savePlace({
+      name: it.name, category: it.category || 'อื่นๆ', status: 'want', visitedAt: null, priority: 2,
+      note: it.address || '', lat: it.lat, lng: it.lng, gmapsId: it.gmapsId || null,
+    });
+  }
+  if (!pickedIds.includes(place.id)) pickedIds = [...pickedIds, place.id];
+  renderPicker();
+  renderPlanResults($('#plan-search-results').dataset.source);
+  toast(`เพิ่ม “${place.name}” แล้ว (${pickedIds.length} ที่ในแผน)`);
+});
+
 formPlan.start.addEventListener('change', () => {
   if (!formPlan.end.value || formPlan.end.value < formPlan.start.value) formPlan.end.value = formPlan.start.value;
 });
@@ -567,6 +643,9 @@ function openPlanForm(id, preset = {}) {
   setColor(pl?.color || PLAN_COLORS[store.plans.length % PLAN_COLORS.length]);
   pickedIds = pl ? [...pl.placeIds] : preset.placeIds || [];
   extraStops = pl?.stops || preset.stops || [];
+  $('#plan-search').value = '';
+  $('#plan-search-results').hidden = true;
+  planResults = [];
   renderPicker();
   dlgPlan.showModal();
 }

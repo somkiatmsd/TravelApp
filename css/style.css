@@ -493,3 +493,28 @@ body[data-view="friends"] .fab { display: none; }
 .popup-plans ul li { min-width: 0; }
 .popup-plan { overflow: hidden; }
 .popup-plan small { flex: none; }
+
+/* Google base map */
+.basemap-switch {
+  display: flex; align-items: center; gap: 4px; padding: 6px 10px; margin-top: 8px !important;
+  border: 0; border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-size: .8rem;
+}
+.basemap-switch span { font-weight: 600; }
+.leaflet-control-attribution .g-logo { height: 14px; vertical-align: -3px; }
+
+/* Add to an existing plan from a pin */
+.popup-plans .row { margin-top: 2px; }
+.add-to-plan { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 132px; overflow: auto; }
+.add-to-plan .popup-plan small { color: var(--primary); font-weight: 600; }
+
+/* Search inside the plan form */
+.plan-search { display: flex; gap: 6px; margin: 4px 0 6px; }
+.plan-search input { flex: 1; min-width: 0; }
+.plan-search .btn { padding: 8px 12px; }
+.search-results.inline { position: static; box-shadow: none; border: 1px solid var(--line); margin: 0 0 8px; max-height: 32vh; }
+.search-results.inline li[data-i] { display: flex; align-items: center; gap: 8px; }
+.search-results.inline li[data-i] span { flex: 1; min-width: 0; }
+.search-results.inline li[data-i] b { flex: none; font-size: .8rem; color: var(--primary); }
+.search-results.inline li.added b { color: var(--visited); }
+.grid2 > label { min-width: 0; }
+dialog input[type=date] { min-width: 0; max-width: 100%; -webkit-appearance: none; appearance: none; }
