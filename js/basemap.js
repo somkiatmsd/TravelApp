@@ -57,7 +57,7 @@ export function setupBasemap(map) {
     if (!entry) {
       const session = await getSession(type);
       const layer = L.tileLayer(`${TILE_API}/v1/2dtiles/{z}/{x}/{y}?session=${session}&key=${encodeURIComponent(googleMapsApiKey)}`, {
-        maxZoom: 21, tileSize: 256, attribution: '',
+        maxZoom: 21, maxNativeZoom: 19, tileSize: 256, attribution: '', // Google serves up to zoom 19; deeper zoom enlarges those tiles
       });
       entry = state.layers[type] = { layer, session };
       // Tiles refused (daily quota used up, expired session…) → fall back to OpenStreetMap for this visit.
