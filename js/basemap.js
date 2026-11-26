@@ -45,6 +45,8 @@ export function setupBasemap(map) {
       const r = await fetch(`${TILE_API}/tile/v1/viewport?${q}`);
       if (r.ok) {
         const j = await r.json();
+        // The map may have switched to OpenStreetMap while this request was out.
+        if (state.provider !== 'google') return;
         const old = credit();
         state.copyright = j.copyright || '';
         map.attributionControl.removeAttribution(old).addAttribution(credit());
