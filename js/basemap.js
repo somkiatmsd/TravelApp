@@ -60,6 +60,18 @@ export function setupBasemap(map) {
         maxZoom: 21, tileSize: 256, attribution: '',
       });
       entry = state.layers[type] = { layer, session };
+      // Tiles refused (daily quota used up, expired session…) → fall back to OpenStreetMap for this visit.
+      let failed = 0;
+      let loaded = 0;
+      layer.on('tileload', () => { loaded++; });
+      layer.on('tileerror', () => {
+        if (++failed >= 6 && failed > loaded && state.provider === 'google' && navigator.onLine) {
+          console.info('Google map tiles failing, using OpenStreetMap');
+          try { localStorage.removeItem(SESSION_KEY + type); } catch {}
+          useOsm();
+          sw.remove();
+        }
+      });
     }
     if (current && current !== entry.layer) map.removeLayer(current);
     if (!map.hasLayer(entry.layer)) entry.layer.addTo(map);
